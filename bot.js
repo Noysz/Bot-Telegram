@@ -348,10 +348,15 @@ const TOOLS = [
         type: 'function',
         function: {
             name: 'web_search',
-            description: 'Cari di web buat dapet sumber/link terkait pertanyaan teknis emulator, error game, atau setting per-game. Balikin daftar judul + URL.',
+            description: 'Cari sumber/link buat pertanyaan TEKNIS spesifik: param dxvk.conf, env var (BOX64_*/DXVK_*/MESA_*), error/crash game tertentu, kompatibilitas game, driver per-GPU (Turnip/Adreno/Mali), versi rilis emulator. JANGAN call buat: sapaan, opini/rekomendasi subjektif ("emulator terbaik"), pertanyaan umum yg bisa dijawab dari pengetahuan domain. Return: daftar judul+URL. Wajib dipanggil SEBELUM web_fetch kalau URL belum diketahui dari hasil search/system prompt.',
             parameters: {
                 type: 'object',
-                properties: { query: { type: 'string', description: 'kata kunci pencarian' } },
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'Query bahasa Inggris, spesifik & padat. Sertakan: nama game/emulator + chipset/GPU + gejala error. Contoh OK: "GTA V Winlator Adreno 740 black screen dxvk", "Box64 BOX64_DYNAREC_BIGBLOCK GameNative". Contoh BURUK: "emulator bagus", "halo".'
+                    }
+                },
                 required: ['query']
             }
         }
@@ -360,10 +365,15 @@ const TOOLS = [
         type: 'function',
         function: {
             name: 'web_fetch',
-            description: 'Ambil isi teks dari sebuah URL (mis. github raw dxvk.conf, halaman pcgamingwiki/protondb, release notes driver). Pakai setelah web_search buat baca detail isinya.',
+            description: 'Ambil isi teks 1 URL HTTPS buat baca detail (dxvk.conf, release notes, thread reddit, PCGW wikitext). HANYA call kalau URL valid: (a) hasil web_search, (b) endpoint resmi dari system prompt — raw.githubusercontent.com/{owner}/{repo}/{branch}/path, pcgamingwiki.com/w/api.php?action=parse&page=<Name>&format=json&prop=wikitext, reddit.com/r/<sub>/comments/<id>/<slug>.json, store.steampowered.com/api/appdetails?appids=<id>, protondb.com/api/v1/reports/summaries/<id>.json, github.com/<owner>/<repo>/releases. JANGAN call URL hasil tebakan/karangan, halaman /wiki/ PCGW (sering 403), atau HTML reddit (pakai .json). Kalau 403/404 → JANGAN retry URL sama; web_search dulu.',
             parameters: {
                 type: 'object',
-                properties: { url: { type: 'string', description: 'URL lengkap (http/https)' } },
+                properties: {
+                    url: {
+                        type: 'string',
+                        description: 'URL lengkap http(s)://. Wajib URL valid (hasil search atau format resmi di description). Bukan placeholder, bukan URL halaman /wiki/ PCGW, bukan HTML reddit (tambah .json).'
+                    }
+                },
                 required: ['url']
             }
         }
