@@ -1,0 +1,23 @@
+# Secrets — JANGAN PERNAH masuk ke repo
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Data runtime bot (history & community KB)
+data/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# yt-dlp cookies
+yt-cookies.txt

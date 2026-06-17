@@ -1,0 +1,19 @@
+{
+  "name": "copux-fourfect-bot",
+  "version": "2.0.0",
+  "description": "COPUX-FourFect — Telegram bot pakar emulator PC-di-Android (Winlator/GameHub/BannerHub).",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "test": "node -c bot.js && echo syntax-ok"
+  },
+  "keywords": ["telegram", "bot", "winlator", "gamehub", "emulator", "android"],
+  "author": "Noysz (Fourfect Group)",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.18.0",
+    "dotenv": "^17.4.2",
+    "node-telegram-bot-api": "^0.65.0"
+  }
+}
