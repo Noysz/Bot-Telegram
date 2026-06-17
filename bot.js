@@ -47,11 +47,13 @@ const ADMIN_IDS = new Set(
         .split(',').map((s) => s.trim()).filter(Boolean)
 );
 
-// Rate limit per-user: maks N pesan per window
-const RATE_MAX = 20;
-const RATE_WINDOW_MS = 60 * 1000;
+// Rate limit per-user: cooldown antar pesan + cap window
+const RATE_COOLDOWN_MS = 5 * 1000;          // minimal 5s antar pesan
+const RATE_MAX = 20;                        // dan/atau maks 20 pesan
+const RATE_WINDOW_MS = 60 * 1000;           // per 60s
 const RATE_WARN_COOLDOWN_MS = 5 * 60 * 1000;
 const rateLog = new Map();
+const rateLastAt = new Map();
 const rateWarnedAt = new Map();
 
 const chatHistory = {};
@@ -247,16 +249,30 @@ function checkRate(userId) {
     if (userId == null) return { ok: true };
     if (ADMIN_IDS.has(String(userId))) return { ok: true };
     const now = Date.now();
+
+    // (1) Cooldown antar pesan — minimal 5 detik
+    const last = rateLastAt.get(userId) || 0;
+    const sinceLast = now - last;
+    if (sinceLast < RATE_COOLDOWN_MS) {
+        const lastWarn = rateWarnedAt.get(userId) || 0;
+        const warn = now - lastWarn > RATE_WARN_COOLDOWN_MS;
+        if (warn) rateWarnedAt.set(userId, now);
+        return { ok: false, reason: 'cooldown', waitSec: Math.ceil((RATE_COOLDOWN_MS - sinceLast) / 1000), warn };
+    }
+
+    // (2) Window cap — maks 20 pesan / 60s
     const arr = (rateLog.get(userId) || []).filter((t) => now - t < RATE_WINDOW_MS);
     if (arr.length >= RATE_MAX) {
         rateLog.set(userId, arr);
         const lastWarn = rateWarnedAt.get(userId) || 0;
         const warn = now - lastWarn > RATE_WARN_COOLDOWN_MS;
         if (warn) rateWarnedAt.set(userId, now);
-        return { ok: false, warn };
+        return { ok: false, reason: 'window', warn };
     }
+
     arr.push(now);
     rateLog.set(userId, arr);
+    rateLastAt.set(userId, now);
     return { ok: true };
 }
 
@@ -639,7 +655,13 @@ bot.on('message', async (msg) => {
     // RATE LIMIT
     const rate = checkRate(userId);
     if (!rate.ok) {
-        if (rate.warn) sendSafe(chatId, `🚦 Slow down bro, lu udah ${RATE_MAX} pesan dalam ${RATE_WINDOW_MS / 1000}s. Tunggu sebentar.`);
+        if (rate.warn) {
+            if (rate.reason === 'cooldown') {
+                sendSafe(chatId, `⏳ Santai bro, jeda *${RATE_COOLDOWN_MS / 1000} detik* antar pesan ya. Tunggu ~${rate.waitSec}s lagi.`);
+            } else {
+                sendSafe(chatId, `🚦 Slow down bro, lu udah *${RATE_MAX} pesan* dalam ${RATE_WINDOW_MS / 1000}s. Istirahat dulu ya.`);
+            }
+        }
         return;
     }
 
