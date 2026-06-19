@@ -1,228 +1,162 @@
-# COPUX — Telegram Bot for Emulator Tech Communities
+# COPUX
 
-> **Pakar AI Telegram khusus dunia emulator Windows-di-Android** (Winlator, GameHub Lite, BannerHub, GameNative, WinNative, Box86/64, FEX, DXVK, Turnip). Dirancang buat ngebantu komunitas opreker — troubleshoot crash, baca screenshot error, cariin driver/build yang relevan, semuanya lewat chat di Telegram.
+Bot Telegram buat komunitas emulator Windows-di-Android — Winlator, GameHub Lite, BannerHub, GameNative, WinNative, Box86/64, FEX, DXVK, Turnip, dll. Gw bikin ini karena capek jawab pertanyaan crash yang sama berulang-ulang di grup, jadi tinggal lempar ke bot.
 
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Telegram Bot API](https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
-[![PM2](https://img.shields.io/badge/PM2-Daemon-2B037A?logo=pm2&logoColor=white)](https://pm2.keymetrics.io/)
-[![License](https://img.shields.io/badge/license-ISC-blue.svg)](#license)
+`@Noysz_bot` — Node.js, single file, jalan di Termux.
 
----
+## Cara kerjanya
 
-## Apa Itu COPUX?
+Bot-nya gw kunci ke domain emulator doang. Nanya resep masakan atau soal coding umum bakal dijawab seadanya/diarahin balik. Kalau ada yang nyebut Mobox/ExaGear/Cassia sebagai solusi, bot bakal nyolot duluan — itu vaporware/udah mati, jangan disaranin lagi.
 
-COPUX (`@Noysz_bot`) adalah bot Telegram berbasis Node.js yang berperan sebagai **God-Tier Emulator & Translation Layer Engineer**. Fokus utamanya bukan asisten umum — tapi spesialis sempit di ranah:
+Format jawaban crash dipaksa terstruktur: `Crash di L<X> — <komponen>. Root cause: <mekanisme>. Fix: <langkah>.` Gw capek baca jawaban AI yang ngambang nggak jelas root cause-nya apa, jadi format ini gw paksa dari prompt level.
 
-- **Frontend emulator modern**: GameHub Lite (Producdevity), BannerHub (The412Banner), GameNative (utkarshdalal), WinNative-Emu, Winlator forks (Ludashi, Frost, Cmod, Star Bionic, Glibc).
-- **Translation layers**: Box86/Box64, FEX-Emu, Proton-arm64ec.
-- **Graphics stack**: DXVK (vanilla + Sarek async/dynasync untuk Mali), VKD3D-Proton, d8vk, Mesa/Turnip/Zink, lsfg-vk-android.
-- **Layer-based crash analysis** (L1 Kernel/Bionic → L7 Anti-cheat/DRM) — bukan tebak-tebakan generik.
+LLM-nya lewat freemodel.dev (default GPT-5.5).
 
-Bot ini didesain agar tetap stabil di **Termux / ARM low-RAM**, dengan rate limit hybrid dan resource cap yang fully tunable per device.
+## Fitur
 
----
+### Search
 
-## Fitur Utama
+`/cari <keyword>` atau nanya natural langsung, bot bakal trigger search sendiri kalau kebutuhan data terbaru. Urutan fallback: Serper → Tavily → DuckDuckGo. DDG nggak butuh API key jadi minimal selalu ada yang jalan.
 
-### Chat AI
-- Bahasa Indonesia gaya opreker (`lu/gw`), to-the-point, no fluff, no DRM lectures.
-- Persona terkunci ke domain emulator — refuse generic small talk, korek balik kalau ada false claim soal Mobox/ExaGear/Cassia (vaporware/usang).
-- Anti-halu: format jawaban crash wajib `Crash di L<X> — <komponen>. Root cause: <mekanisme>. Fix: <langkah>.`
-- Powered by GPT-5.5 via [freemodel.dev](https://freemodel.dev) gateway.
+### Vision
 
-### Web Search 3-Tier (Auto-Fallback)
-`Serper → Tavily → DuckDuckGo`. Cukup `/cari <keyword>` atau tanya natural — bot auto-trigger search kalau perlu data terbaru. Tier ke-3 (DDG) ga butuh API key, jadi fallback selalu jalan.
+Kirim screenshot error, bot baca isinya (handle magic-byte detection karena Telegram suka kirim MIME `application/octet-stream` yang ngaco). Paste link YouTube, bot ambil 6 frame thumbnail pake yt-dlp + ffmpeg buat dianalisa — kepake banget buat video tutorial yang errornya kelihatan di gambar.
 
-### Vision Engine
-- **Photo OCR/analysis**: kirim screenshot crash/error langsung ke chat, bot baca isinya (magic-byte detection — robust ke MIME `application/octet-stream` dari Telegram).
-- **YouTube frame extractor**: paste URL YouTube, bot ekstrak 6 frame thumbnail via `yt-dlp + ffmpeg` buat analisa video tutorial/gameplay.
+### Sesi
 
-### Smart Sessions
-- **Private chat**: 1 sesi per `chatId`.
-- **Group chat**: 1 sesi per `chatId:userId` — konteks user A & user B di grup yang sama ga ke-mix.
-- Auto-flush ke disk debounced (default 5s), atomic write (`.tmp` + rename) — aman dari crash mendadak.
-- Auto-restore history saat startup; expired sessions di-prune (default TTL 6 jam).
+DM itu 1 sesi per chatId. Di grup, per `chatId:userId` biar konteks user A sama B nggak nyampur. Auto-save ke disk tiap 5 detik (debounced), atomic write jadi aman kalau prosesnya mati di tengah jalan. Expired session di-prune otomatis (default TTL 6 jam).
 
-### Hybrid Rate Limit
-- **5 detik cooldown** antar pesan per user.
-- **20 pesan / 60 detik** window cap.
-- Warning anti-spam (per-user cooldown 5 menit).
-- Admin (`ADMIN_IDS` env) bypass rate limit + akses `/stats`.
+### Rate limit
 
-### Resource Safety (ARM-Friendly)
-- Global LLM concurrency semaphore (default 3 paralel, tunable).
-- Per-session in-flight lock — anti race condition di `chatHistory`.
-- Garbage collection berkala: prune rate-log map setelah 10 menit idle, user stats setelah 7 hari.
-- Global `unhandledRejection` + `uncaughtException` guard + auto-save history sebelum crash.
+5 detik cooldown antar pesan, cap 20 pesan/60 detik. Kena limit dapet warning, bukan langsung di-ban, tapi cooldown warning-nya sendiri 5 menit biar nggak spam warning juga. Admin (`ADMIN_IDS`) bebas dari semua ini + bisa akses `/stats`.
 
-### File Reader
-Kirim dokumen text/log/json/code (≤1 MB default) — bot baca isinya dalam konteks reply.
+### Resource cap
 
----
+Ini yang paling penting karena jalan di HP. Concurrency LLM di-semaphore (default 3 paralel), per-session lock biar nggak race condition pas nulis ke chatHistory bersamaan. Ada garbage collector buat bersihin rate-log map sama user stats yang udah nggak aktif. Global error handler nangkep `unhandledRejection`/`uncaughtException` dan nyimpen history dulu sebelum proses mati.
+
+### File reader
+
+Kirim dokumen text/log/json/code (≤1MB), bot baca isinya buat konteks reply.
 
 ## Commands
 
 | Command | Akses | Fungsi |
-|---------|-------|--------|
-| `/start` | Semua | Sapaan singkat |
-| `/reset` | Semua | Clear history sesi lo |
-| `/cari <query>` | Semua | Paksa web search (3-tier fallback) |
-| `/stats` | Admin | Statistik user aktif & top user |
+|---|---|---|
+| `/start` | semua | sapaan |
+| `/reset` | semua | clear history sesi |
+| `/cari <query>` | semua | force web search |
+| `/stats` | admin | statistik user |
 
-Di grup: mention `@Noysz_bot` atau reply ke pesan bot. Di DM: kirim pesan langsung.
+Grup: mention atau reply pesan bot. DM: langsung chat aja.
 
----
+## Tuning buat ARM/Termux
 
-## Adaptive ARM Tuning
+Semua cap di bawah ini env-tunable. Default-nya gw set buat HP 4-6GB RAM:
 
-Semua resource cap fully **env-tunable**. Default cocok buat HP mid-range (4–6 GB RAM). Override sesuai device:
+| Env | Default | Turunin kalau | Naikin kalau |
+|---|---|---|---|
+| `MAX_HISTORY` | 10 | HP <4GB, ke 6-8 | server, ke 20+ |
+| `MAX_CONCURRENT_LLM` | 3 | HP 2-4GB, ke 1-2 | server, ke 5+ |
+| `MAX_PHOTO_BYTES` | 6MB | low-RAM, ke 3MB | — |
+| `MAX_FILE_SIZE_BYTES` | 1MB | — | server, ke 4-8MB |
+| `MAX_FETCH_BYTES` | 4MB | — | — |
+| `SESSION_TTL_MS` | 6 jam | RAM ketat, ke 2-3 jam | — |
+| `SAVE_DEBOUNCE_MS` | 5000 | — | I/O lambat, ke 10000 |
 
-| Env Var | Default | Kapan diturunkan | Kapan dinaikkan |
-|---------|---------|------------------|-----------------|
-| `MAX_HISTORY` | 10 | HP <4 GB → 6–8 | Server lega → 20+ |
-| `MAX_CONCURRENT_LLM` | 3 | HP 2–4 GB → 1–2 | Server → 5+ |
-| `MAX_PHOTO_BYTES` | 6 MB | HP low-RAM → 3 MB | — |
-| `MAX_FILE_SIZE_BYTES` | 1 MB | — | Server → 4–8 MB |
-| `MAX_FETCH_BYTES` | 4 MB | — | — |
-| `SESSION_TTL_MS` | 6 jam | RAM ketat → 2–3 jam | — |
-| `SAVE_DEBOUNCE_MS` | 5000 | — | I/O lambat → 10000 |
+Detail di `.env.example`.
 
-Detail lengkap di `.env.example`.
+## Install
 
----
-
-## Deploy
-
-### Prerequisites
-- Node.js **18+**
-- Git
-- PM2 (`npm install -g pm2`)
-- (Opsional) `yt-dlp` + `ffmpeg` buat fitur YouTube frame extractor
-
-### Install
+Butuh Node 18+, git, PM2 (`npm install -g pm2`). Opsional `yt-dlp` + `ffmpeg` kalau mau fitur YouTube extractor.
 
 ```bash
 git clone https://github.com/Noysz/Bot-Telegram.git
 cd Bot-Telegram
 npm install
-```
-
-### Konfigurasi `.env`
-
-Copy template, lalu isi:
-
-```bash
 cp .env.example .env
 nano .env
 ```
 
-**Wajib:**
-```env
-TELEGRAM_TOKEN=isi_token_dari_botfather
-FREEMODEL_KEY=isi_key_dari_freemodel.dev
+Yang wajib diisi:
+
+```
+TELEGRAM_TOKEN=
+FREEMODEL_KEY=
 ```
 
-**Opsional** (fallback otomatis ke DuckDuckGo kalau kosong):
-```env
+Opsional (kosongin aja kalau ga punya, fallback ke DDG):
+
+```
 SERPER_API_KEY=
 TAVILY_API_KEY=
 ```
 
-**Admin** (pisah koma — admin bebas rate limit + akses `/stats`):
-```env
-ADMIN_IDS=123456789,987654321
+Admin, pisah koma:
+
+```
+ADMIN_IDS=
 ```
 
-### Jalankan dengan PM2
+Jalanin:
 
 ```bash
 pm2 start bot.js --name copux
 pm2 save
-pm2 startup       # generate startup script (sekali aja)
+pm2 startup
 ```
 
-### Cek status
+Cek:
 
 ```bash
 pm2 status
 pm2 logs copux --lines 50
 ```
 
----
+## Yang masih jelek
 
-## Kelebihan
+Single file ~1.1k baris, masih kebaca tapi udah mulai sesak — kalau scope nambah lagi gw harus pecah ke `handlers/`, `services/`, `prompts/`.
 
-- ✅ **Domain expertise mendalam** — bukan AI generik, fokus tajam ke emulator stack modern dengan layer-based diagnostic.
-- ✅ **Hybrid rate limit dewasa** — cooldown + window cap + warning anti-spam.
-- ✅ **Multi-modal input** — text, photo (vision OCR), YouTube link, dokumen.
-- ✅ **3-tier search fallback** — selalu jalan walau tanpa API key berbayar (DDG free).
-- ✅ **ARM-optimized** — sengaja dirancang buat Termux / HP, semua cap tunable.
-- ✅ **Crash-safe** — atomic save, global error guards, auto-restore session.
-- ✅ **Group-aware** — sesi per-user di grup, ga ada bocor konteks antar user.
-- ✅ **Anti-halu protocol** — format jawaban diagnostik terstruktur, anti tebak-tebakan.
-- ✅ **Zero ceremony** — single-file (`bot.js`), 3 dependencies utama, no bloat framework.
+State (rate log, in-flight, stats) di RAM doang, restart ya hilang. History-nya aman karena ke disk, tapi yang lain nggak.
 
-## Keterbatasan
+No database, pure JSON file (`data/history.json`). Cukup buat skala grup komunitas, jangan dipake buat traffic gede.
 
-- ⚠️ **Single-file architecture (~1.1k LOC)** — gampang di-grok, tapi mulai padat. Refactor ke modul akan dibutuhin kalau scope nambah.
-- ⚠️ **In-memory state** — semua rate log, in-flight, user stats di RAM. Restart = state hilang (history tetep aman karena ke disk).
-- ⚠️ **Persona-locked** — bot di-tune buat domain emulator. Tanya soal resep masakan / coding umum bakal dijawab pendek atau diarahkan balik ke topic.
-- ⚠️ **Single-tenant token** — satu instance = satu bot Telegram. Kalau mau multi-tenant, perlu refactor token handling.
-- ⚠️ **No database** — pure file-based persistence (`data/history.json`). Cukup buat skala kecil-menengah; bukan untuk traffic enterprise.
-- ⚠️ **YouTube extractor opsional** — butuh `yt-dlp + ffmpeg` ter-install + cookies file (`/root/yt-cookies.txt`) buat video age-restricted.
-- ⚠️ **Polling mode** — pakai `node-telegram-bot-api` polling (bukan webhook). Lebih simple deploy, tapi sedikit lebih boros koneksi.
-- ⚠️ **API key terikat ke `freemodel.dev`** — kalau gateway down, LLM ga jalan. Belum ada fallback ke OpenAI/Anthropic native.
-- ⚠️ **Rate limit per-user, bukan per-group** — di grup besar, 20+ user bisa burst bareng dan trigger upstream 429.
+Polling mode, bukan webhook — lebih simple deploy tapi boros koneksi dikit. Belum sempet bikin webhook mode.
 
----
+LLM-nya 100% gantung ke freemodel.dev. Gateway-nya down, bot bisu. Belum ada fallback ke provider lain.
 
-## Project Structure
+Rate limit-nya per-user, bukan per-grup. Grup gede kalau 20 orang nge-spam bareng, bisa kena 429 dari upstream.
+
+Single tenant — satu instance cuma buat satu bot token. Mau multi-bot, harus refactor token handling-nya dulu.
+
+## Struktur
 
 ```
 Bot-Telegram/
-├── bot.js              # Main entry — handler, AI calls, persona, vision, search
+├── bot.js          # semuanya ada di sini — handler, AI call, persona, vision, search
 ├── package.json
-├── .env                # Secrets (gitignored)
-├── .env.example        # Template + dokumentasi adaptive tuning
-├── data/
-│   ├── history.json    # Auto-save sessions
-│   └── kb/             # Knowledge base curated (tracked)
-└── README.md
+├── .env            # gitignored
+├── .env.example
+└── data/
+    ├── history.json
+    └── kb/         # knowledge base curated, di-track
 ```
 
----
+## Stack
 
-## Tech Stack
+Node 18+, `node-telegram-bot-api` (polling), `axios`, `dotenv`, PM2. LLM lewat freemodel.dev. Search: Serper/Tavily/DDG. Media: yt-dlp + ffmpeg (opsional).
 
-| Layer | Tool |
-|-------|------|
-| Runtime | Node.js 18+ |
-| Telegram client | `node-telegram-bot-api` (polling) |
-| HTTP client | `axios` |
-| Env loader | `dotenv` |
-| Process manager | PM2 |
-| LLM gateway | [freemodel.dev](https://freemodel.dev) (default: GPT-5.5) |
-| Search providers | Serper, Tavily, DuckDuckGo |
-| Media tools | `yt-dlp`, `ffmpeg` (opsional) |
+## Mau dibenerin
 
----
-
-## Roadmap (Indicative)
-
-- [ ] Modular refactor — split `bot.js` jadi `handlers/`, `services/`, `prompts/`.
-- [ ] Per-group rate limit (selain per-user).
-- [ ] Webhook mode (opsional, polling tetep default).
-- [ ] Multi-LLM fallback (freemodel → OpenAI → Anthropic).
-- [ ] Persistent KV store (SQLite) untuk stats & rate log.
-
----
+- Pecah `bot.js` jadi modul
+- Rate limit per-grup
+- Webhook mode
+- Fallback LLM kalau freemodel down
+- SQLite buat stats/rate log, biar nggak hilang pas restart
 
 ## License
 
-ISC © [Noysz](https://github.com/Noysz) (Fourfect Group)
+ISC © Noysz (Fourfect Group)
 
----
+## Kontribusi
 
-## Contributing
-
-PR welcome — tapi please respect persona lock (no DRM lecturing, no Mobox/ExaGear/Cassia suggestions, no halu generic answers). Buka issue dulu kalau perubahan besar.
+PR boleh, tapi jangan rusak persona bot-nya — no ceramah DRM, no nyaranin Mobox/ExaGear/Cassia, no jawaban ngambang. Diskusi dulu di issue kalau mau ubah yang gede-gede.
