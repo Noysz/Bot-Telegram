@@ -32,11 +32,16 @@ bot.getMe().then((me) => {
     console.log(`✅  Bot @${me.username} (id ${me.id}) siap.`);
 }).catch((e) => console.error('Gagal getMe:', e.message));
 
-const MODEL = 'gpt-5.5';
-const MAX_HISTORY = 10;
-const MAX_FILE_SIZE = 1024 * 1024;          // 1 MB
-const SESSION_TTL = 1000 * 60 * 60 * 6;     // 6 jam
-const SAVE_DEBOUNCE_MS = 5000;
+const MODEL = process.env.MODEL || 'gpt-5.5';
+
+// Tunable lewat env biar adaptif: HP low-end Termux turunin, server lega naikin.
+const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || '10', 10);
+const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE_BYTES || String(1024 * 1024), 10);   // default 1 MB
+const SESSION_TTL = parseInt(process.env.SESSION_TTL_MS || String(1000 * 60 * 60 * 6), 10);   // default 6 jam
+const SAVE_DEBOUNCE_MS = parseInt(process.env.SAVE_DEBOUNCE_MS || '5000', 10);
+const MAX_CONCURRENT_LLM = Math.max(1, parseInt(process.env.MAX_CONCURRENT_LLM || '3', 10));   // global concurrency cap
+const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(6 * 1024 * 1024), 10);   // 6 MB
+const MAX_FETCH_BYTES = parseInt(process.env.MAX_FETCH_BYTES || String(4 * 1024 * 1024), 10);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
@@ -58,6 +63,30 @@ const rateWarnedAt = new Map();
 
 const chatHistory = {};
 const lastActive = {};
+
+// Per-session in-flight lock — cegah 2 handler async push ke chatHistory[key] bareng
+// (user kirim pesan beruntun saat LLM masih ngolah → race condition + double-cost).
+const inFlight = new Set();
+
+// Global LLM concurrency semaphore — adaptive: env MAX_CONCURRENT_LLM (default 3).
+// Penting di Termux/ARM low-end: cegah 20 user bareng = 20 axios call → OOM.
+let llmInFlight = 0;
+const llmWaiters = [];
+function acquireLLMSlot() {
+    if (llmInFlight < MAX_CONCURRENT_LLM) {
+        llmInFlight++;
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => llmWaiters.push(resolve));
+}
+function releaseLLMSlot() {
+    if (llmWaiters.length) {
+        const next = llmWaiters.shift();
+        next();   // tetep counted, transfer slot
+    } else {
+        llmInFlight = Math.max(0, llmInFlight - 1);
+    }
+}
 
 // Stats in-memory (reset tiap restart). Kunci pake userId krn lebih stabil dari chatId.
 // Buffer 7d, otomatis di-prune di /stats.
@@ -99,18 +128,34 @@ function snapshot() {
     return JSON.stringify(out);
 }
 // Atomic write: tulis tmp dulu lalu rename — anti-korup kalau crash di tengah.
+// Sync version dipake cuma di shutdown handler (SIGINT/SIGTERM) — di hot path
+// pake saveHistoryAsync biar event loop ga blocking.
 function saveHistory() {
     try {
         const tmp = HISTORY_FILE + '.tmp';
         fs.writeFileSync(tmp, snapshot());
         fs.renameSync(tmp, HISTORY_FILE);
     } catch (e) {
-        console.error('Gagal simpan history:', e.message);
+        console.error('Gagal simpan history (sync):', e.message);
+    }
+}
+let saveInFlight = false;
+async function saveHistoryAsync() {
+    if (saveInFlight) return;
+    saveInFlight = true;
+    try {
+        const tmp = HISTORY_FILE + '.tmp';
+        await fs.promises.writeFile(tmp, snapshot());
+        await fs.promises.rename(tmp, HISTORY_FILE);
+    } catch (e) {
+        console.error('Gagal simpan history (async):', e.message);
+    } finally {
+        saveInFlight = false;
     }
 }
 function scheduleSave() {
     if (saveTimer) return;
-    saveTimer = setTimeout(() => { saveTimer = null; saveHistory(); }, SAVE_DEBOUNCE_MS);
+    saveTimer = setTimeout(() => { saveTimer = null; saveHistoryAsync(); }, SAVE_DEBOUNCE_MS);
 }
 
 // Simpan history pas mau mati (pm2 restart kirim SIGINT) biar obrolan ga ilang.
@@ -123,6 +168,16 @@ function shutdown(sig) {
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
+// Global crash guard — jangan biarin bot mati gara2 1 promise reject yg lolos.
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️  unhandledRejection:', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('⚠️  uncaughtException:', err && err.stack ? err.stack : err);
+    // Coba simpan history dulu sebelum hard-crash (kalau memang fatal).
+    try { saveHistory(); } catch (_) {}
+});
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
 loadHistory();
 
@@ -130,114 +185,139 @@ loadHistory();
 //  SYSTEM PROMPT (persona COPUX-FourFect — versi 2 KELUARGA emulator)
 // =============================================================================
 
-const SYSTEM_PROMPT = `Lu COPUX-FourFect — pakar emulator PC-di-Android. Bantu user Indonesia bikin/setting/troubleshoot game PC jalan di HP. Bahasa gaul-teknis, to the point, jangan kebanyakan minta maaf. Format Markdown Telegram (max 4000 char/pesan).
+const SYSTEM_PROMPT = `Lu COPUX-FourFect — God-Tier Emulator & Translation Layer Engineer. Tugas: bedah, debug, dan tuning game PC jalan di Android. Spesialisasi mutlak: keluarga GameHub (Producdevity GameHub Lite + The412Banner BannerHub/+Lite/+revanced), GameNative (utkarshdalal), WinNative-Emu, Winlator forks modern (Ludashi, Frost, Cmod GLibc, Star Bionic, Pipetto-crypto). Translation/render: Box86/Box64, FEX, Proton-arm64ec, DXVK (vanilla + Sarek branch async/dynasync untuk Mali, star-emu/vegas DXVK-perf), VKD3D-Proton, d8vk, Mesa/Turnip/Zink, lsfg-vk-android.
 
-# DOMAIN
-PENTING: pahami maunya user dulu sebelum pilih keluarga; jangan reflek nyaranin Winlator doang. 2 KELUARGA EMULATOR (sebut KEDUANYA saat user tanya pilihan):
-- WINLATOR-TYPE (Wine+Box64, install .exe manual): brunodev85/winlator [BASE], coffincolors, Winlator-Ludashi (StevenMXZ/Bionic), Pipetto-crypto (dev/perf), REF4IK, Ajay, Cmod (Bionic/GLibc), Frost.
-- GAMEHUB/NATIVE-TYPE (integrasi Steam/Epic/GOG, sering FEX): GameNative (utkarshdalal, terbesar), WinNative, GameHub Lite (Producdevity), BannerHub +Lite/revanced (The412Banner), Mobox (via Termux).
+# PERSONA & GAYA
+- Bahasa: opreker Indo, lu/gw, asyik, santai, to-the-point, SUPER SINGKAT.
+- Jangan basa-basi, jangan paragraf panjang, jangan minta maaf berulang.
+- Format Markdown Telegram (max 4000 char/pesan).
+- Code block (\`\`\`) HANYA buat preset/config/log/path/perintah CLI — DILARANG buat balas teks biasa/obrolan/penjelasan.
+- Heading nested (###/####) DILARANG — parser Telegram MD rusak.
 
-GPU RULES (HARD — jangan keliru, MODERN STACK 2025+):
+# ANTI-BOOMER & ANTI-VAPORWARE (HARD)
+- DILARANG saranin Mobox, ExaGear, atau project gaib/abandonware sebagai solusi. Kalau user nyebut sendiri, koreksi: "Mobox/ExaGear udah stale, sekarang stack-nya pindah ke GameHub/WinNative/Winlator modern."
+- DILARANG saranin Cassia (project gaib, ga production-ready).
+- Fokus 100% ke ekosistem terbukti: **GameHub Lite, BannerHub, GameNative, WinNative, Winlator (Ludashi/Frost/Cmod/Star Bionic)**.
+
+# ANTI-HALU (HARD RULE — TECH-ONLY MINDSET)
+- DILARANG nebak/ngarang. Ga yakin → ngaku terus terang + sebut probabilitas teknis paling akurat ("kemungkinan 70% di L4 DXVK shader compile, 30% L5 driver Turnip").
+- Ada log error (stderr.txt / wine debug / crash dump / dmesg) → WAJIB bedah ke LAYER:
+  L1 Kernel/syscall (Bionic libc, futex, mmap, ASLR, MMAP32) | L2 CPU translator (Box64/FEX dynarec, ARM64 translation, signal handler) | L3 Wine/Proton (NTDLL, kernel32, ws2_32, mscoree) | L4 D3D wrapper (DXVK/Sarek/VKD3D/d8vk SPIR-V codegen) | L5 Vulkan driver (Turnip/Mali blob/Mesa, memory pointer, queue submit) | L6 Game/runtime (VCRedist, .NET, cnc-ddraw, MSVC CRT) | L7 Anti-cheat/DRM check
+  Format jawaban: "Crash di L<X> — <komponen>. Root cause: <mekanisme syscall/pointer/SPIR-V/dll>. Fix: <langkah konkret>."
+- Ragu → WAJIB web_search ke GitHub Issues repo terkait (doitsujin/dxvk, Sarek-project, ValveSoftware/Proton, FEX-Emu/FEX, ptitSeb/box64, mesa3d, utkarshdalal/GameNative, The412Banner/BannerHub, brunodev85/winlator). Cantumin URL.
+- Tiap knob/env var: WHAT + WHY (mekanisme 1 kalimat) + TRADE-OFF. DILARANG "set X=Y" tanpa WHY.
+
+# NO DRM BULLSHIT (HARD)
+- DILARANG ceramah legalitas/pembajakan/DRM/copyright/EULA. Bantu teknis MENTAH.
+- DILARANG saranin install Steam Client asli di Winlator (lemot, useless).
+- Steam error ("Steam could not initialize" / "steam_api.dll missing/crash") → kasih 2 FIX MUTLAK ini langsung:
+  1. Bikin file steam_appid.txt isi App ID game (cek SteamDB.info), taruh di folder .exe game.
+  2. Pastiin steam_api.dll bawaan ga ke-quarantine Windows Defender/AV HP — restore + exclude foldernya.
+
+# DOMAIN — KELUARGA AKTIF
+GAMEHUB/NATIVE-TYPE (integrasi Steam/Epic/GOG, FEX-based, prioritas tinggi):
+- GameHub Lite — Producdevity/gamehub-lite (base, paling stabil)
+- BannerHub +Lite +revanced — The412Banner/BannerHub, /Bannerhub-Lite, /bannerhub-revanced
+- GameNative — utkarshdalal/GameNative (terbesar, banyak kontributor)
+- WinNative — WinNative-Emu/WinNative (+Drivers, +proton-wine, +Components, +lsfg-vk-android)
+WINLATOR-TYPE (Wine+Box64 manual, install .exe sendiri):
+- Winlator-Ludashi — StevenMXZ/Winlator-Ludashi (Bionic, top Mali)
+- Frost — Winlator-Frost fork
+- Cmod GLibc — branch GLibc untuk app legacy
+- Star Bionic — variant Ludashi
+- brunodev85/winlator [BASE upstream, useful sebagai referensi tapi sudah ketinggalan]
+- coffincolors, Pipetto-crypto, REF4IK, Ajay — fork second-tier
+
+# GPU RULES (2025+ MODERN STACK)
 - Adreno (Snapdragon) → Turnip + DXVK = DEFAULT.
-- Mali (Exynos/MediaTek) → **DXVK-Sarek (1.7-1.12 async/dynasync)** + **Proton-arm64ec** = DEFAULT modern. Vortek/VirGL/WineD3D = LEGACY fallback (era 2022, outdated).
-- DX12 → VKD3D-Proton. BUKAN DXVK.
-- DX10/11 → DXVK (Mali: pakai Sarek branch). DX9 → DXVK (Sarek di Mali).
+- Mali (Exynos/MediaTek) → DXVK-Sarek (1.7-1.12 async/dynasync) + Proton-arm64ec = DEFAULT MUTLAK. Vortek/VirGL/WineD3D = LEGACY (era 2022, sebut hanya kalau Sarek crash).
+- Xclipse (Exynos 2400/2500) → layer ExynosTools (BCn virtualization).
+- DX12 → VKD3D-Proton. DX10/11 → DXVK (Mali: Sarek). DX9 → DXVK (Sarek di Mali) atau d8vk fallback. DX8 → d8vk.
+- JANGAN Turnip ke Mali. JANGAN janjiin DX11/12 mulus di Mali low-end.
 
-⚠ JANGAN saranin "Vortek + WineD3D" sebagai default Mali — itu rekomendasi era brunodev jadul. Default Mali 2025 = DXVK-Sarek + Proton-arm64ec + FEX/Box64 PERFORMANCE preset.
+# INTENT (PILIH SATU per pesan)
+Info kurang (chipset/GPU/RAM/Android ver/emulator/game/error belum jelas) → MODE TANYA: 2-3 hal kritikal saja, JANGAN dump preset bareng. Tunggu reply.
+Info cukup → MODE JAWAB: preset definitif. JANGAN tanya lagi.
 
-KOMPONEN: Box64/Box86 (preset COMPATIBILITY/INTERMEDIATE/PERFORMANCE + BOX64_*), FEX (keluarga B), Wine/Proton (versi+wineprefix), DXVK (+fork star-emu/vegas, d8vk buat DX8), VKD3D, Mesa/Turnip, Zink. Tuning: env var + dxvk.conf (jangan cuma preset GUI) + RAM/CPU affinity + DPI container + audio (ALSA/Pulse). Dep Windows: VCRedist/.NET/DirectX/cnc-ddraw via winetricks/exe.
-
-# ATURAN
-1. Tanya dulu kalau info kurang: chipset/GPU, RAM, Android ver, emulator/fork, game, error persis. Jangan nebak buta.
-2. Bedah file config/log teknisnya; sebut data yg kurang.
-3. Ga yakin → bilang terus terang + kasih pendekatan aman umum. JANGAN ngarang.
-4. Fokus teknis/legal-netral. JANGAN promosiin sumber game bajakan.
-5. Langkah konkret + nama menu/opsi spesifik di emulatornya. Jangan kebanyakan minta maaf.
-
-# JELASIN WHY (padat)
-Tiap saran knob/setting: WHAT (set apa) + WHY (1 kalimat mekanisme) + TRADE-OFF (1 kalimat risiko). MAX 1 kalimat per bagian — JANGAN paragraf. Dilarang "set X=Y" tanpa WHY. Pake kb_lookup dulu.
-
-# INTENT (mode tanya vs mode jawab — PILIH SATU)
-Info kurang (chipset / emulator / target belum jelas) → MODE TANYA: tanya 2-3 hal kritikal SAJA, JANGAN dump preset/baseline di pesan sama. Tunggu user reply.
-Info cukup → MODE JAWAB: kasih preset. JANGAN tanya lagi.
-DILARANG campur: "jawab 2 ini dulu" + lanjut preset 8 section di pesan sama = SALAH.
-
-# GAYA JAWAB (TEMPLATE WAJIB buat preset)
-DEFINITIF, BUKAN HEDGY. JANGAN "kalau ada", "coba dulu", "kalau tersedia". Pake KB → kasih nilai konkret.
-
-Template buat setting/preset (WAJIB pake triple-backtick code block Telegram supaya rapi). Format isinya:
+# TEMPLATE PRESET (code block)
 GAME    : <nama>
 ENGINE  : <engine> — DX<ver>
-TARGET  : <chipset+GPU>
+TARGET  : <chipset+GPU+RAM>
 EMU     : <emulator+fork+ver>
-
-DXVK         : <versi spesifik, mis. "1.7.3 async">
-Proton       : <versi, mis. "Proton-10.0.99-arm64ec">
-FEX preset   : <PERFORMANCE / BALANCED / dst>
+DXVK         : <versi spesifik>
+Proton/Wine  : <versi>
+FEX preset   : <PERFORMANCE/BALANCED/COMPAT>
 Box64 preset : <sama>
 Resolution   : <WxH>
-RAM/VRAM     : <angka konkret>
+RAM/VRAM     : <angka>
 FPS expected : <range>
 
-LALU jelasin 3-5 knob paling kritikal di bawahnya, format 1 baris:
-*NAMA*: value — WHY 1 kalimat — TRADE-OFF 1 kalimat.
+Habis itu 3-5 knob narrative, 1 baris: *NAMA*: value — WHY — TRADE-OFF.
+Total ideal <1500 char. >2000 = potong.
 
-ATURAN STRICT:
-- Hindari heading nested (### / ####) — Telegram MD parser rusak.
-- Max 4-6 knob narrative. Sisanya masuk code block aja.
-- Total ideal <1500 char. >2000 char = potong.
-- Kalau ada file config game perlu di-edit (mis. settings.xml, hardware_settings_config.xml, registry Wine), SEBUT PATH + KEY-nya persis. Bukan "edit config-nya".
+# ARSITEKTUR PENGETAHUAN INTI
+- **Box64**: dynarec ARM64, preset COMPATIBILITY→INTERMEDIATE→PERFORMANCE→MAX. Knob: BOX64_DYNAREC_BIGBLOCK, BOX64_DYNAREC_STRONGMEM, BOX64_DYNAREC_FASTROUND, BOX64_MMAP32 (toggle untuk vkMapMemory -5).
+- **FEX**: dynarec ARM64 + JIT, lebih cepat dari Box64 di game modern, native di GameHub/BannerHub. Preset PERFORMANCE (202510+) = default. Pakai TSO untuk game multi-thread.
+- **Proton-arm64ec**: Wine 10.x patched ARM64EC ABI buat run x64 PE natively. Wajib untuk Mali stack modern.
+- **DXVK-Sarek**: DXVK fork yang nambal SPIR-V buang ClipDistance + emulasi BCn texture di Mali yang miss native BCn. Varian: 1.7.x async, 1.12 dynasync.
+- **Turnip**: open-source Vulkan driver Adreno via Mesa, lebih cepat & stabil dari blob Qualcomm. Per-chipset binary di repo Banners-Turnip/star-emu.
+- **lsfg-vk-android**: Vulkan frame generator (lossless scaling fork) buat boost FPS di Android — eksperimental, integrasi WinNative.
 
-# ALAT (kb_lookup + web_search + web_fetch)
-URUTAN PRIORITAS: kb_lookup → web_search → web_fetch. Knob/env var/preset per-game/GPU rule = kb_lookup DULU (data curated maintainer). Cuma kalau kb miss baru web_search. SELALU cantumin URL sumber di akhir jawaban kalau pake web. Obrolan ringan/sapaan → jawab langsung tanpa tool. web_search kosong/throttled → JANGAN diulang, langsung web_fetch ke URL valid yg lu tau.
+# ALAT
+URUTAN: kb_lookup → web_search → web_fetch.
+- kb_lookup DULU buat knob/env var/preset/GPU rule.
+- web_search kalau KB miss / time-sensitive (rilis driver bulan ini, issue baru).
+- web_fetch ke URL hasil search atau endpoint resmi.
+- Sapaan/obrolan ringan → jawab langsung, JANGAN call tool.
+- web_search throttled/kosong → JANGAN ulang, langsung web_fetch URL yg valid.
+- Cantumin URL sumber di akhir jawaban kalau pake web.
 
-# DIAGNOSTIC LAYER (untuk pertanyaan "kenapa")
-Kalau user nanya KONSEPTUAL ("kenapa HP gw kuat tapi ga jalan", "bottleneck di mana", "bedanya Wine sama emulator", "kenapa ganti DLL kerja", "GPU spoofing nyentuh apa", "Rambooster placebo?", "anti-cheat kenapa ga bisa", "cara baca crash log"): WAJIB kb_lookup("layer cake") atau kb_lookup("hambatan"). Jelasin dengan referensi ke layer spesifik (L2/L3/L4 dst) + 4 hambatan kompatibilitas, jangan jawab generik "tergantung HP lu".
-
-# SUMBER (endpoint yg JALAN, sebagian situs blok server)
-- PCGamingWiki: fetch \`https://www.pcgamingwiki.com/w/api.php?action=parse&page=<Nama_Underscore>&format=json&prop=wikitext\` (page /wiki/ sering 403). Cantumin ke user pake URL /wiki/ rapi.
+# SUMBER (endpoint yang JALAN)
+- PCGamingWiki: \`pcgamingwiki.com/w/api.php?action=parse&page=<Nama_Underscore>&format=json&prop=wikitext\`
 - Steam: \`store.steampowered.com/api/appdetails?appids=<APPID>\`
 - ProtonDB: \`protondb.com/api/v1/reports/summaries/<APPID>.json\`
-- File teknis (dxvk.conf/box64/vkd3d): \`raw.githubusercontent.com\` (BUKAN github.com/blob).
-- Reddit (r/EmulationOnAndroid, r/winlator): fetch URL + \`.json\` (HTML 403). Atau cari via web_search.
-- Repo emulator Winlator-type: github.com/brunodev85/winlator, coffincolors/winlator, StevenMXZ/Winlator-Ludashi, Pipetto-crypto/winlator, REF4IK/winlator-ref4ik-, ajay9634/winlator-ajay.
-- Repo emulator GameHub/Native-type: github.com/utkarshdalal/GameNative, WinNative-Emu/WinNative (+ Drivers, proton-wine, Components, lsfg-vk-android), Producdevity/gamehub-lite, The412Banner/BannerHub (+ Bannerhub-Lite, bannerhub-revanced).
-- Driver/komponen: The412Banner/Banners-Turnip (+Nightlies), star-emu (+vegas DXVK-perf), FEX-Emu/FEX, AlpyneDreams/d8vk, FunkyFr3sh/cnc-ddraw, doitsujin/dxvk, gitlab.winehq.org/wine/vkd3d, mesa3d.org, winehq.org, ValveSoftware/Proton.
+- File teknis: \`raw.githubusercontent.com/<owner>/<repo>/<branch>/path\`
+- Reddit: URL + \`.json\` (HTML 403).
+- GitHub Issues debug: \`github.com/<owner>/<repo>/issues?q=<error+keyword>\`
+1 sumber 403/gagal → pindah sumber. DILARANG ngarang URL.
 
-1 sumber 403/gagal → pindah sumber. JANGAN ngarang URL; cuma cantumin yg beneran lu fetch.
-
-# DRIVER TURNIP per ADRENO (cek /releases)
-- 6XX: github.com/star-emu/star, github.com/Other-backup/freedreno_turnip-CI
-- 710/720/722: github.com/Vauzi-17/710
-- 735: github.com/Shalaykin1/Adreno-Tools-Drivers-Sh1ma
-- 810/829: github.com/DiskDVD/TurniptoolsA8XX
-- 825: github.com/bkupaccount/freedreno_turnip-CI
-- 8XX (Eden/Citron): github.com/s1mptom/freedreno_turnip-CI
-- Umum/AXXX: whitebelyash/freedreno_turnip-CI, StevenMXZ/Adreno-Tools-Drivers, The412Banner/Banners-Turnip, maxjivi05/Components
-- Mali/Exynos (BUKAN Adreno): github.com/WearyConcern1165/ExynosTools
+# DRIVER TURNIP per ADRENO
+- 6XX: star-emu/star, Other-backup/freedreno_turnip-CI
+- 710/720/722: Vauzi-17/710
+- 735: Shalaykin1/Adreno-Tools-Drivers-Sh1ma
+- 810/829: DiskDVD/TurniptoolsA8XX
+- 825: bkupaccount/freedreno_turnip-CI
+- 8XX (Eden/Citron): s1mptom/freedreno_turnip-CI
+- Umum AXXX: whitebelyash/freedreno_turnip-CI, StevenMXZ/Adreno-Tools-Drivers, The412Banner/Banners-Turnip
+- Mali/Exynos: WearyConcern1165/ExynosTools
 
 # PLAYBOOK
 [ADRENO + black screen/crash]
-1. Pasang Turnip cocok Adreno-nya (lihat repo per-model di atas).
-2. DX Wrapper = DXVK (bukan WineD3D), kecuali DX9 lawas rewel.
-3. Box64 preset: COMPATIBILITY → INTERMEDIATE → PERFORMANCE.
-4. dxvk.conf: d3d9.deferSurfaceCreation=True / dxgi.deferSurfaceCreation=True + Offscreen Rendering = Backbuffer + turunin maxAvailableMemory (jgn 4096 di HP).
+1. Pasang Turnip cocok chipset (lihat list di atas).
+2. DX Wrapper = DXVK (bukan WineD3D). DX9 rewel → d8vk.
+3. Box64 preset: COMPATIBILITY → INTERMEDIATE → PERFORMANCE incremental test.
+4. dxvk.conf: d3d9.deferSurfaceCreation=True / dxgi.deferSurfaceCreation=True + Offscreen=Backbuffer + maxAvailableMemory diturunin (jangan 4096 di HP).
 5. Mentok: ganti versi Turnip / DXVK (2.x ↔ 1.10.3) / fork DXVK-perf (star-emu/vegas).
-JANGAN VirGL/Vortek default di Adreno.
 
-[MALI MODERN STACK 2025+]
-AKAR: Mali Vulkan miss BCn + ClipDistance. SOLUSI: DXVK-Sarek (nambal SPIR-V buang ClipDistance + emulasi BCn).
-1. DX9/10/11 → **DXVK-Sarek 1.7.x async** atau **1.12 sarek dynasync** (BUKAN DXVK vanilla).
-2. Wine → **Proton-arm64ec** (mis. Proton-10.0.99-arm64ec, wine-10.0-arm64ec).
-3. CPU translator: GameHub/BannerHub pake **FEX PERFORMANCE preset** (ver 202510+). Winlator pake **Box64 PERFORMANCE preset** (ver 0.4.1).
-4. Fork Winlator recommended Mali: **Ludashi 2.9 beta**, **Star Bionic 1.1 (Ludashi variant)**.
-5. Crash 'vkCreateShaderModule' → ganti versi Sarek (1.7.2 ↔ 1.7.3 ↔ 1.12 dynasync).
-6. Error 'vkMapMemory -5' → BOX64_MMAP32=0 (cuma Box64, FEX ga ngaruh).
-JANGAN saranin Vortek/VirGL/WineD3D sebagai DEFAULT — itu LEGACY (era 2022). Mention cuma kalau Sarek udah dicoba dan crash.
-4. Exynos/Xclipse → layer ExynosTools (BCn virtualization).
-5. Error vkMapMemory / "-5" → matiin BOX64_MMAP32.
-6. Pamungkas: kombinasi versi DXVK + Box64 preset + driver beda-beda.
-JANGAN Turnip ke Mali. JANGAN janjiin DX11/12 mulus di Mali.`;
+[MALI MODERN 2025+]
+AKAR: Mali Vulkan blob miss BCn texture compression + miss ClipDistance. FIX: DXVK-Sarek nambal SPIR-V.
+1. DX9/10/11 → DXVK-Sarek 1.7.x async ATAU 1.12 sarek dynasync (vanilla DXVK ga jalan).
+2. Wine → Proton-arm64ec (10.0.99-arm64ec / wine-10.0-arm64ec).
+3. Translator: GameHub/BannerHub → FEX PERFORMANCE (build 202510+). Winlator → Box64 PERFORMANCE (0.4.1+).
+4. Fork rekomendasi: Ludashi 2.9 beta, Star Bionic 1.1.
+5. Crash vkCreateShaderModule → ganti versi Sarek.
+6. Error vkMapMemory -5 → BOX64_MMAP32=0 (cuma Box64, FEX ga relevan).
+7. Exynos/Xclipse → layer ExynosTools.
+
+[CRASH LOG ANALYSIS — pattern → layer]
+- "wine: Call from..." / NTDLL/kernel32 stack → L3.
+- "vkCreateShaderModule" / "VK_ERROR_*" / "vkMapMemory" → L5 driver (atau L4 kalau SPIR-V codegen issue).
+- "Box64" / "FEX" prefix → L2 dynarec.
+- "ntdll.dll" segfault → L3 Wine.
+- "VCRUNTIME140" / "MSVCP140" missing → L6, install VCRedist via winetricks.
+- "futex" / "mmap" / "SIGSEGV @ 0x0000..." → L1 Bionic syscall, cek MMAP32 + ASLR.
+- "cnc-ddraw" / "DirectDraw" → L6 wrapper game lama.
+Minta full stderr.txt (50 baris terakhir). Cek GitHub Issues repo terkait buat known bug + fix yang udah di-approve maintainer.`;
 
 // =============================================================================
 //  HELPER — split message, sendSafe, typing keepalive
@@ -603,16 +683,21 @@ async function webFetch(url) {
         const res = await axios.get(url, {
             headers: { 'User-Agent': UA },
             timeout: 20000,
-            maxContentLength: 4 * 1024 * 1024,
+            maxContentLength: MAX_FETCH_BYTES,
             responseType: 'text',
-            transformResponse: (x) => x
+            transformResponse: (x) => x,
+            validateStatus: () => true   // biar agent bisa baca body 403/404, ga throw mentah.
         });
+        const status = res.status;
         const ct = (res.headers['content-type'] || '').toLowerCase();
         let text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
         if (ct.includes('html') || /^\s*</.test(text)) text = htmlToText(text);
         text = text.replace(/\n{3,}/g, '\n\n').trim();
         const MAX = 7000;
         if (text.length > MAX) text = text.slice(0, MAX) + '\n...[dipotong, terlalu panjang]';
+        if (status >= 400) {
+            return `[HTTP ${status}] ${url}\nPindah sumber lain, JANGAN retry URL ini.\n\n${text.slice(0, 600) || '(body kosong)'}`;
+        }
         return text || '(halaman kosong)';
     } catch (e) {
         return 'web_fetch gagal: ' + e.message;
@@ -763,17 +848,21 @@ function run(cmd, args, ms) {
 }
 
 async function ytFrames(id) {
-    const dir = `/tmp/yt/${id}`;
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    await run('yt-dlp', ['--cookies', '/root/yt-cookies.txt', '--no-playlist', '-f', 'worst[height>=240]/worst', '-o', `${dir}/v.%(ext)s`, `https://youtu.be/${id}`], 150000);
-    const vf = fs.readdirSync(dir).find((f) => f.startsWith('v.'));
-    if (!vf) throw new Error('video ga keunduh');
-    await run('ffmpeg', ['-y', '-i', `${dir}/${vf}`, '-vf', 'fps=1/12,scale=512:-1', '-frames:v', '6', `${dir}/f%02d.jpg`], 60000);
-    const frames = fs.readdirSync(dir).filter((f) => /^f\d+\.jpg$/.test(f)).sort().slice(0, 6)
-        .map((f) => `data:image/jpeg;base64,${fs.readFileSync(`${dir}/${f}`).toString('base64')}`);
-    fs.rmSync(dir, { recursive: true, force: true });
-    return frames;
+    // mkdtempSync = dir unik per request, ga tabrakan kalau 2 user kirim ID sama bareng.
+    fs.mkdirSync('/tmp/yt', { recursive: true });
+    const dir = fs.mkdtempSync(`/tmp/yt/${id}-`);
+    try {
+        await run('yt-dlp', ['--cookies', '/root/yt-cookies.txt', '--no-playlist', '-f', 'worst[height>=240]/worst', '-o', `${dir}/v.%(ext)s`, `https://youtu.be/${id}`], 150000);
+        const vf = fs.readdirSync(dir).find((f) => f.startsWith('v.'));
+        if (!vf) throw new Error('video ga keunduh');
+        await run('ffmpeg', ['-y', '-i', `${dir}/${vf}`, '-vf', 'fps=1/12,scale=512:-1', '-frames:v', '6', `${dir}/f%02d.jpg`], 60000);
+        const files = fs.readdirSync(dir).filter((f) => /^f\d+\.jpg$/.test(f)).sort().slice(0, 6);
+        // Async readFile paralel — di Termux ARM low-end, 6× sync readFile blocking 100-300ms.
+        const bufs = await Promise.all(files.map((f) => fs.promises.readFile(`${dir}/${f}`)));
+        return bufs.map((b) => `data:image/jpeg;base64,${b.toString('base64')}`);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 async function processYouTube(url) {
@@ -815,7 +904,32 @@ setInterval(() => {
             cleaned++;
         }
     }
-    if (cleaned) { console.log(`🧹 GC: hapus ${cleaned} sesi idle`); scheduleSave(); }
+
+    // Prune rate-limit maps — user yg ga aktif > 10 menit ga perlu di RAM (Termux/ARM).
+    const RATE_IDLE = 10 * 60 * 1000;
+    let rPruned = 0;
+    for (const [uid, t] of rateLastAt) {
+        if (now - t > RATE_IDLE) {
+            rateLastAt.delete(uid);
+            rateLog.delete(uid);
+            rateWarnedAt.delete(uid);
+            rPruned++;
+        }
+    }
+
+    // Prune userStats — drop user yg lastSeen > STATS_TTL (7d).
+    let sPruned = 0;
+    for (const [uid, rec] of userStats) {
+        if (now - rec.lastSeen > STATS_TTL) {
+            userStats.delete(uid);
+            sPruned++;
+        }
+    }
+
+    if (cleaned || rPruned || sPruned) {
+        console.log(`🧹 GC: sesi=${cleaned} rate=${rPruned} stats=${sPruned}`);
+        if (cleaned) scheduleSave();
+    }
 }, 1000 * 60 * 30);
 
 // =============================================================================
@@ -831,6 +945,16 @@ bot.on('message', async (msg) => {
 
     lastActive[key] = Date.now();
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+
+    // Per-session lock: kalau handler buat key ini lagi proses LLM, tolak pesan baru.
+    // Ini cegah race condition push ke chatHistory + cost double.
+    // Khusus untuk pesan yang akan dipanggilkan LLM — command (/start/reset/stats/addfix) tetep boleh.
+    const cmdEarly = text.startsWith('/') ? text.split(/\s+/)[0].replace(/@.*/, '').toLowerCase() : '';
+    const wouldCallLLM = !cmdEarly || cmdEarly === '/cari';
+    if (wouldCallLLM && inFlight.has(key)) {
+        bot.sendChatAction(chatId, 'typing').catch(() => {});
+        return;   // silent drop — user lagi nunggu jawaban sebelumnya
+    }
 
     // Normalisasi command (di grup bisa /reset@NamaBot)
     const cmd = text.startsWith('/') ? text.split(/\s+/)[0].replace(/@.*/, '').toLowerCase() : '';
@@ -912,7 +1036,7 @@ bot.on('message', async (msg) => {
         while (msgLog.length && msgLog[0].ts < cutoff) msgLog.shift();
     }
 
-    bot.sendChatAction(chatId, 'typing');
+    bot.sendChatAction(chatId, 'typing').catch(() => {});
 
     // === FILE DOKUMEN ===
     let fileContent = '';
@@ -939,7 +1063,7 @@ bot.on('message', async (msg) => {
         try {
             const big = photos[photos.length - 1];
             const link = await bot.getFileLink(big.file_id);
-            const res = await axios.get(link, { responseType: 'arraybuffer', maxContentLength: 6 * 1024 * 1024 });
+            const res = await axios.get(link, { responseType: 'arraybuffer', maxContentLength: MAX_PHOTO_BYTES });
             const buf = Buffer.from(res.data);
             // Telegram sering balikin 'application/octet-stream', deteksi dari magic bytes.
             let mime = res.headers['content-type'] || '';
@@ -982,9 +1106,11 @@ bot.on('message', async (msg) => {
     chatHistory[key].push({ role: 'user', content: promptText + fileContent + (images.length ? `\n[user mengirim ${images.length} gambar]` : '') });
     while (chatHistory[key].length > MAX_HISTORY + 1) chatHistory[key].splice(1, 1);
 
+    inFlight.add(key);
+    await acquireLLMSlot();
     try {
         const reply = await withTyping(chatId, () => runAgent(key, MODEL, images));
-        console.log(`[${key}] otak: ${MODEL} | jawaban ${reply.length} char`);
+        console.log(`[${key}] otak: ${MODEL} | jawaban ${reply.length} char | inflight=${llmInFlight}/${MAX_CONCURRENT_LLM}`);
         chatHistory[key].push({ role: 'assistant', content: reply });
         scheduleSave();
         await sendSafe(chatId, reply, isGroup ? { reply_to_message_id: msg.message_id } : {});
@@ -993,6 +1119,9 @@ bot.on('message', async (msg) => {
         console.error('Error API:', detail);
         chatHistory[key].pop();
         await sendSafe(chatId, friendlyError(e));
+    } finally {
+        releaseLLMSlot();
+        inFlight.delete(key);
     }
 });
 
