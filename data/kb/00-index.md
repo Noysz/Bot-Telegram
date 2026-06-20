@@ -93,6 +93,17 @@ File ini = peta. Tiap topik linked ke file detail di folder yg sama.
 ## Chipset-specific
 - `chipset-affinity.md` — CORE_AFFINITY_MASK per chipset (Helio G99, Dim 8400, SD 8 Elite, dll).
 
+## StevenMXZ ecosystem (Winlator-Ludashi + Contents CDN + Adreno A8XX)
+- `stevenmxz-ecosystem.md` — 3 build variant Ludashi (vanilla/ludashi/redmagic) buat OEM perf trigger
+  Xiaomi/RedMagic. Inflection point Ludashi versi (3.0 Vulkan rewrite, 2.9 Sarek bundle, 2.8.2 Box64
+  32-bit fix, 2.8 Driver Download Manager). Winlator-Contents CDN catalog 47+ component (.wcp) buat
+  custom repo URL. DXVK mobile matrix lengkap (Mali Sarek 11.1, Adreno gplasync 2.7.1, ARM64EC variants).
+  WOWBox64 = Box64 WoW64-aware buat Wine 11 ARM64EC stack. SD 8 Elite (A8xx) need Adrenotools-Drivers
+  v849 BUKAN universal Turnip.
+  **PAKE FILE INI** kalau user nanya: "Winlator Ludashi apa", "build vanilla/ludashi/redmagic bedanya",
+  "Xiaomi MIUI performance", "RedMagic frame gen", "Driver Download Manager", "WOWBox64", "ARM64EC",
+  "SD 8 Elite Turnip", "DXVK build mana", "custom repo URL Winlator".
+
 ## Cara cari di KB
 Bot panggil `kb_lookup(topic)` — substring match case-insensitive ke header section + body file.
 Topic bisa: nama env var, nama knob, nama game, nama chipset, atau konsep (mis. "TSO").

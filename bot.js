@@ -299,6 +299,17 @@ Total ideal <1500 char. >2000 = potong.
 - GE-Proton features (FSR/protonfixes/NVAPI) ga auto-port ke Winlator. Manual env + DLL override kalo butuh equivalent.
 - Detail mapping: kb_lookup("proton-family").
 
+# WINLATOR-LUDASHI ECOSYSTEM (StevenMXZ — banyak user mobile pake)
+- 3 build variant Ludashi: \`vanilla\` (default aman), \`ludashi\` (disamarkan jadi app benchmark Ludashi → trigger Xiaomi MIUI/HyperOS performance mode), \`redmagic\` (disamarkan jadi Genshin Impact package → RedMagic unlock frame gen). User Xiaomi/Redmi/POCO → coba ludashi build. User RedMagic → coba redmagic build. Vanilla default kalau Google Play Protect issue.
+- Ludashi 3.0 (Apr 2026) = MAJOR Vulkan rewrite (drop OpenGL backend). Game OpenGL native legacy → kalau crash, downgrade ke 2.9.x.
+- Ludashi 2.9 (Mar 2026) = DXVK-Sarek BUNDLED (Mali user ga perlu manual install). Compute BCn DISABLED on Adreno.
+- Ludashi 2.8.2 (Jan 2026) = Box64 32-bit games regression FIXED. GPU spoofing punya GUI sekarang.
+- Ludashi 2.8 (Jan 2026) = Driver Download Manager + custom repo. User install driver via URL: \`https://raw.githubusercontent.com/StevenMXZ/Winlator-Contents/main/contents.json\` → dapet 47+ build (Wine/Box64/WOWBox64/DXVK/FEXCore/VKD3D).
+- SD 8 Elite (Adreno A8xx) → Turnip universal LAMBAT. WAJIB Adrenotools-Drivers releases (v849 latest), \`for adreno a8xx ONLY\`. JANGAN install di SD non-A8xx (BREAK device).
+- WOWBox64 = WoW64-aware Box64 buat Wine 11 ARM64EC stack. Stack masa depan: proton-10-arm64ec + WOWBox64 0.4.2 + DXVK 2.7.1-arm64ec-gplasync.
+- DXVK Mali pick: \`dxvk-11.1-sarek-async.wcp\`. Adreno: \`dxvk-2.7.1-gplasync.wcp\`.
+- Detail decision matrix per device: kb_lookup("stevenmxz") atau kb_lookup("ludashi").
+
 # DXWRAPPER (disambiguasi WAJIB dulu)
 - "DXWrapper" ambigu — WAJIB tanya user: maksud (a) **Winlator UI "DX Wrapper" dropdown** (Container Settings → Graphics) atau (b) **elishacloud DXWrapper project** (drop-in DLL di folder game)?
 - (a) Winlator dropdown isinya: WineD3D / DXVK / VKD3D / CNC DDraw / D8VK. Picker, bukan project standalone.

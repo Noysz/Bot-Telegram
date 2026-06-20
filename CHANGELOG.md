@@ -4,6 +4,27 @@ Format: keep-a-changelog ringan. Tanggal absolut. Versi major = kapabilitas baru
 
 ---
 
+## [Unreleased] — 2026-06-20 (sore)
+
+### KB diperluas — StevenMXZ ecosystem (Winlator-Ludashi + Contents CDN + A8XX stack)
+
+Deep-dive 17 repo StevenMXZ. Core relevant: Winlator-Ludashi (872⭐), Adreno-Tools-Drivers (657⭐ build script), Winlator-Contents (CDN .wcp catalog 47+ builds), Adrenotools-Drivers (a8xx prebuilt), mesa-tu8 (A8XX hacks).
+
+**Added:**
+- `data/kb/stevenmxz-ecosystem.md` — 3 build variant Ludashi (vanilla/ludashi/redmagic) buat OEM perf trigger Xiaomi/RedMagic. Inflection point per versi (3.0 Vulkan rewrite, 2.9 Sarek bundle, 2.8.2 Box64 32-bit fix, 2.8 Driver Download Manager). Winlator-Contents CDN catalog dengan DXVK matrix lengkap mobile (Mali Sarek 11.1, Adreno gplasync 2.7.1, ARM64EC variants). WOWBox64 stack masa depan (Wine 11 ARM64EC). SD 8 Elite (A8xx) stack pakai Adrenotools-Drivers v849 (a8xx ONLY).
+
+**Changed:**
+- `bot.js` SYSTEM_PROMPT: section baru "WINLATOR-LUDASHI ECOSYSTEM" — 3 build variant per OEM, Driver Download Manager custom repo URL, A8xx warning, WOWBox64 stack pointer.
+- `data/kb/00-index.md` — entry + trigger keyword (Ludashi build variant, Xiaomi MIUI, RedMagic, WOWBox64, SD 8 Elite, custom repo URL, ARM64EC).
+
+**Skipped:**
+- StevenMXZ/Fixes-For-Games (essentially empty)
+- StevenMXZ/VkGHL (Linux-targeted post-process, not Winlator)
+- StevenMXZ/PSX2, xenia_android, wfm, vkcaps-adrenotools (off-topic untuk Winlator KB)
+- StevenMXZ/FEX, box64, wine (semua fork WIP, ga stable release)
+
+---
+
 ## [Unreleased] — 2026-06-20
 
 ### KB diperluas — DXWrapper (elishacloud) disambiguasi + stacking pattern
