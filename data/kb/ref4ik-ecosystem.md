@@ -8,6 +8,33 @@ Tujuan file ini: bot ngerti **fork REF4IK** (beda dari brunodev base + Ludashi +
 
 ---
 
+## ⚠️ FAKTA KERAS PERTAMA — REF4IK CDN GA ADA DXVK
+
+Yang sering disalahpahami bot dan user:
+
+**REF4IK Components-Adrenotools- CDN cuma punya: Wine custom-patched (10.x ref4ik), Box64 (0.3.9/0.4.1), FEX (2601), VKD3D-Proton (3.0a), plus runtime exe (VCRedist/PhysX/dotnet). ZERO DXVK BUILD.**
+
+Konsekuensi langsung:
+
+1. **User Mali apa pun (Dimensity/Helio/Exynos)** — DXVK-Sarek WAJIB. REF4IK CDN ga punya → 2 pilihan:
+   - **(a) Cross-pull via v9+ content provider:** set custom URL `https://raw.githubusercontent.com/StevenMXZ/Winlator-Contents/main/contents.json` di Driver Download Manager. Tarik `dxvk-11.1-sarek-async.wcp` dari StevenMXZ CDN.
+   - **(b) Ganti fork ke Ludashi 2.9+:** Sarek bundled, zero config.
+   - **Opsi (b) lebih waras buat user yang ga mau setup ribet.** Opsi (a) cuma kalau user udah commit REF4IK karena VCRedist convenience.
+
+2. **User Adreno modern** — sama. REF4IK ga ship DXVK 2.x-gplasync. Mau pake = cross-pull dari StevenMXZ atau ganti ke Ludashi.
+
+3. **REF4IK strong points (REAL value-nya):**
+   - Wine custom-patched `10.2-ref4ik` (18k DL) — improvements khusus yang ga ada di upstream Wine 10.
+   - VCRedist/PhysX/dotnet bundled `.wcp` — game butuh runtime tinggal klik install dari CDN, ga perlu winetricks manual.
+   - Frame gen support (v7+) + experimental Steam launching.
+   - Russian-speaking community + dukungan bahasa.
+
+**Rule praktis bot:** user Mali + tanya REF4IK → JANGAN cuma kasih "Sarek 1.7 dynasync" tanpa context, KARENA itu artinya user musti tau cross-pull. Pilihan SHARP:
+- "Buat Dimensity 8400 Ultra mending Ludashi 2.9+ vanilla/ludashi (kalau Xiaomi) — Sarek bundled, zero setup."
+- "Tapi kalau lo udah commit REF4IK karena suka VCRedist convenience: v9+ punya content provider custom URL — set ke StevenMXZ contents.json, tarik DXVK-Sarek dari sana."
+
+---
+
 ## Repo summary (yang relevan)
 
 | Repo | Stars | Status | Apa itu |

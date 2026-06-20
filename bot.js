@@ -323,12 +323,13 @@ Total ideal <1500 char. >2000 = potong.
 - Detail mapping: kb_lookup("proton-family").
 
 # REF4IK ECOSYSTEM (Winlator-ref4ik Russian community fork — 92⭐ active)
+- ⚠️ FAKTA KERAS: REF4IK Components-Adrenotools- CDN **ZERO DXVK BUILD**. Cuma Wine custom-patched + Box64 + FEX + VKD3D + runtime exe (VCRedist/PhysX/dotnet). User Mali pake REF4IK pengen DXVK-Sarek → 2 pilihan: (a) **cross-pull**: set content provider \`custom\` di Driver Download Manager + URL \`https://raw.githubusercontent.com/StevenMXZ/Winlator-Contents/main/contents.json\` → tarik dxvk-11.1-sarek-async dari StevenMXZ CDN. (b) **lebih waras**: ganti fork ke Ludashi 2.9+ (Sarek bundled, zero config). Default rekomendasi user Mali = OPSI B kecuali user udah commit REF4IK karena VCRedist convenience.
 - Fork brunodev branch \`bionic-ref4ik\`. 2 build variant: \`lite\` (default aman) dan \`lud\` (sama trick Ludashi-style, package disamarkan jadi app Ludashi benchmark → trigger Xiaomi MIUI/HyperOS performance mode). User Xiaomi/Redmi/POCO pakai REF4IK → saranin \`lud\`. RedMagic frame gen → BUKAN REF4IK, arahin StevenMXZ \`redmagic\` variant.
 - Inflection point: v9 (Mei 2026) renderer full Vulkan rewrite drop legacy GL + content provider cross-pollination (ref4ik/the412banner/custom URL). v7 frame gen support + experimental Steam launching. v6 custom driver repo support + gyroscope.
-- v9+ cross-pollination = user bisa point Driver Download Manager ke StevenMXZ contents.json buat tarik DXVK build yang ga ada di REF4IK CDN. URL: \`https://raw.githubusercontent.com/StevenMXZ/Winlator-Contents/main/contents.json\`.
 - Components-Adrenotools- CDN keunikan: BUNDLED VCRedist/PhysX/dotnet sebagai .wcp (other forks user winetricks manual). Wine custom-patched: \`10.2-ref4ik.wcp\` paling rame (18k DL). FEX cuma 2601 — user butuh range luas arahin StevenMXZ (2505-2605).
 - User pake repo lama \`Winlator-REF4IK\` (huruf kapital, ARCHIVED Nov 2025) → STOP, arahin ke \`winlator-ref4ik-\` (lowercase + dash, active).
-- Detail comparison REF4IK vs StevenMXZ: kb_lookup("ref4ik") atau kb_lookup("stevenmxz").
+- JANGAN saranin "DXVK-Sarek X.Y di REF4IK" tanpa nyebut: (1) REF4IK CDN ga punya DXVK → wajib cross-pull, ATAU (2) ganti ke Ludashi 2.9+. Itu factual error.
+- Detail: kb_lookup("ref4ik") atau kb_lookup("stevenmxz").
 
 # WINLATOR-LUDASHI ECOSYSTEM (StevenMXZ — banyak user mobile pake)
 - 3 build variant Ludashi: \`vanilla\` (default aman), \`ludashi\` (disamarkan jadi app benchmark Ludashi → trigger Xiaomi MIUI/HyperOS performance mode), \`redmagic\` (disamarkan jadi Genshin Impact package → RedMagic unlock frame gen). User Xiaomi/Redmi/POCO → coba ludashi build. User RedMagic → coba redmagic build. Vanilla default kalau Google Play Protect issue.
