@@ -63,6 +63,8 @@ Inflection point yang bot harus tau:
 
 Pattern: Driver Download Manager (Ludashi 2.8+) baca `contents.json` di repo ini. User point custom repo URL = `https://raw.githubusercontent.com/StevenMXZ/Winlator-Contents/main/contents.json` → otomatis dapet 47+ build update tanpa sideload manual.
 
+**Sibling CDN** (cross-ref): The412Banner punya `winlator-contents` repo dengan struktur sama (`contents.json` raw GitHub), 138 entry (DXVK ×41, Box64 ×24, dst). URL: `https://raw.githubusercontent.com/The412Banner/winlator-contents/main/contents.json`. Bisa dipake user yang mau cross-pull dari ekosistem The412Banner. Detail: kb_lookup("the412banner").
+
 **Yang available (per Juni 2026):**
 
 | Type | Count | Versi range | Highlight buat mobile |

@@ -104,6 +104,10 @@ File ini = peta. Tiap topik linked ke file detail di folder yg sama.
   Winlator", "Wine 10.2-ref4ik", "VCRedist .wcp install", "Telegram winlatorruu", "frame gen Winlator"
   (v7+), "content provider the412banner".
 
+## The412Banner ecosystem (BannerHub 3 produk + Bannerlator + Nightlies CDN)
+- `the412banner-ecosystem.md` — **3 produk SEPARATE** (BannerHub v3.8.0, BannerHub Lite v1.0.2, BannerHub v6 1.0.0-609 — beda base, beda keystore, ga update-over-able). Bannerlator (Winlator continuation post-Star-archive, BUKAN BannerHub). Nightlies = source of truth binary `.wcp` auto-build hourly. winlator-contents CDN URL (`https://raw.githubusercontent.com/The412Banner/winlator-contents/main/contents.json` — 138 entry). Banners-Turnip alt Mesa main builder. Tools: BCI (BannersComponentInjector no-root component manager), AIO-Graphics-Test (diagnostic), GamePathFixer (v5.x only), dxvk-unified (DXVK+VKD3D 1-file, BUKAN d7vk merge), bannerhub-nano-offline (700 MB offline build).
+  **PAKE FILE INI** kalau user nanya: "BannerHub apa", "BannerHub vs Lite vs revanced", "BannerHub v6", "Bannerlator", "BannersComponentInjector", "BCI", "AIO-Graphics-Test", "GamePathFixer", "dxvk-unified", "Nightlies", "the412banner CDN", "Ludashi-plus Lossless.dll", "offline BannerHub".
+
 ## StevenMXZ ecosystem (Winlator-Ludashi + Contents CDN + Adreno A8XX)
 - `stevenmxz-ecosystem.md` — 3 build variant Ludashi (vanilla/ludashi/redmagic) buat OEM perf trigger
   Xiaomi/RedMagic. Inflection point Ludashi versi (3.0 Vulkan rewrite, 2.9 Sarek bundle, 2.8.2 Box64

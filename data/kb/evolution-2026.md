@@ -204,3 +204,5 @@ Sumber: github.com/{doitsujin/dxvk, ptitSeb/box64, FEX-Emu/FEX}/releases.
 5. **Mali user "DXVK 2.x crash"**: konfirmasi ulang Vulkan version + GPL support. Kalau ga ada GPL → arahin ke Sarek, jangan paksain 2.x.
 6. **d8vk standalone** ditanya: tegasin — udah ke-merge ke DXVK 2.4. Pake DXVK aja.
 7. **Sebelum bilang "upgrade Box64 + DXVK + FEX"**: tanya emulator dulu. Winlator family beda paradigm dari GameHub family.
+8. **User Ludashi-plus v3.1.2-pre2+ LSFG frame-gen ga jalan**: ingatin — Lossless.dll BUKAN bundled lagi di pre2 (compliance). User wajib **Settings → Import Lossless.dll** manual. v3.1.1 dan lebih lama masih bundled. Detail: kb_lookup("the412banner").
+9. **User upgrade BannerHub v3.x → BannerHub v6 fail install**: SHARED_USER_INCOMPATIBLE karena keystore beda. WAJIB uninstall produk lama dulu (backup config via Export Config sebelumnya). 3 produk BannerHub (v3.x / Lite / v6) NEVER update-over-able. Detail: kb_lookup("the412banner").

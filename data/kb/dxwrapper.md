@@ -200,3 +200,9 @@ State per Juni 2026:
 | DirectX 12 | VKD3D-Proton | d3d12 → Vulkan |
 
 elishacloud DXWrapper sweet spot = **kolom 1 baris pertama** (DDraw non-C&C, terutama di Mali).
+
+## Alt 1-file all-DX wrapper
+
+The412Banner ada `dxvk-unified.wcp` — packaging DXVK 2.7.1 (yang udah ada d7vk D3D1-7 fixed-function path upstream-merged) + VKD3D-Proton 3.0b dalam 1 .wcp (~9.8 MB compressed, ~54 MB uncompressed). Cover D3D1-12 sekaligus.
+
+⚠️ **Anti-halu**: BUKAN d7vk merge baru — d7vk udah upstream di DXVK (same commit SHA). Value-nya cuma **packaging convenience** (drop sekali, ga perlu mix DXVK + VKD3D + ddraw wrapper terpisah). Detail: kb_lookup("the412banner").

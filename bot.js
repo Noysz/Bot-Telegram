@@ -236,6 +236,7 @@ Keyword trigger (case-insensitive):
 - "WINEDLLOVERRIDES" / "DLL override" / "SKSE" / "BG3SE" / "BepInEx" → kb_lookup("winedllovr")
 - Fork name: "CMOD" / "Frost" / "Bionic" / "GLibc" / "Pipetto" / "Star Bionic" / "Ludashi" → kb_lookup("forks-landscape")
 - Apa pun yang nyebut "Winlator fork" / "fork mana bagus" / "fork mana cocok" → kb_lookup("forks-landscape") + kb_lookup("stevenmxz")
+- "BannerHub" / "BannerHub Lite" / "BannerHub v6" / "Bannerlator" / "BannersComponentInjector" / "BCI" / "AIO-Graphics-Test" / "GamePathFixer" / "dxvk-unified" / "Nightlies" / "bannerhub-nano-offline" / "Ludashi-plus" / "Lossless.dll" → kb_lookup("the412banner")
 
 Contoh konkret:
 - User: "Winlator Ludashi bagus?" → STEP 1: kb_lookup("ludashi"). STEP 2: BARU jawab pake fakta dari KB (3 build variant, inflection 3.0/2.9/2.8.2, dst).
@@ -268,7 +269,7 @@ Combo chipset+game BELUM ada empirical? Boleh pakai matrix theoretical, TAPI WAJ
 # DOMAIN — KELUARGA AKTIF
 GAMEHUB/NATIVE-TYPE (integrasi Steam/Epic/GOG, FEX-based, prioritas tinggi):
 - GameHub Lite — Producdevity/gamehub-lite (base, paling stabil)
-- BannerHub +Lite +revanced — The412Banner/BannerHub, /Bannerhub-Lite, /bannerhub-revanced
+- BannerHub family — The412Banner: **3 produk SEPARATE** (BannerHub v3.x base GameHub 5.3.5 ReVanced / BannerHub Lite base GameHub Lite 5.1.4 / BannerHub v6 base XiaoJi GameHub 6.0.9 — beda keystore, ga update-over-able). BUKAN "+revanced variant of v3.x".
 - GameNative — utkarshdalal/GameNative (terbesar, banyak kontributor)
 - WinNative — WinNative-Emu/WinNative (+Drivers, +proton-wine, +Components, +lsfg-vk-android)
 WINLATOR-TYPE (Wine+Box64 manual, install .exe sendiri):
@@ -276,6 +277,7 @@ WINLATOR-TYPE (Wine+Box64 manual, install .exe sendiri):
 - Frost — Winlator-Frost fork
 - Cmod GLibc — branch GLibc untuk app legacy
 - Star Bionic — variant Ludashi
+- Bannerlator — The412Banner (post-Star-archive personal continuation, frame-gen built-in, BUKAN BannerHub launcher)
 - brunodev85/winlator [BASE upstream, useful sebagai referensi tapi sudah ketinggalan]
 - coffincolors, Pipetto-crypto, REF4IK, Ajay — fork second-tier
 

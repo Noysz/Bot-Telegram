@@ -27,6 +27,8 @@
   - Winlator → **Box64** (versi 0.4.1).
 - **Preset preset**: di GameHub/BannerHub mostly **PERFORMANCE / EXTREME** (bukan Compatibility lagi — Compatibility outdated default).
 - **Winlator fork populer Mali**: **Star Bionic 1.1 (Ludashi variant)**, **Ludashi 2.9 beta**.
+
+**Sumber Turnip alt** (cross-ref): selain StevenMXZ Adrenotools-Drivers (A8xx only), ada The412Banner/Banners-Turnip yang build Mesa main → 3 zip per release (A6xx/A7xx universal + A8xx + 710/720 test), cadence hourly. User butuh universal/710/720 → Banners-Turnip. Detail: kb_lookup("the412banner").
 - **Wrapper extra**: **leegao wrapper** — buat game tertentu (DX9-DX11 legacy heavy).
 
 ### Vortek/WineD3D = LEGACY (kapan masih relevan)
