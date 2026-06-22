@@ -143,18 +143,24 @@ function saveHistory() {
     }
 }
 let saveInFlight = false;
+let saveInFlightPromise = null;   // ref ke promise berjalan; dipakai shutdown buat await beneran (bukan polling boolean).
 async function saveHistoryAsync() {
-    if (saveInFlight) return;
+    if (saveInFlight) return saveInFlightPromise;
     saveInFlight = true;
-    try {
-        const tmp = HISTORY_FILE + '.tmp';
-        await fs.promises.writeFile(tmp, snapshot());
-        await fs.promises.rename(tmp, HISTORY_FILE);
-    } catch (e) {
-        console.error('Gagal simpan history (async):', e.message);
-    } finally {
-        saveInFlight = false;
-    }
+    const work = (async () => {
+        try {
+            const tmp = HISTORY_FILE + '.tmp';
+            await fs.promises.writeFile(tmp, snapshot());
+            await fs.promises.rename(tmp, HISTORY_FILE);
+        } catch (e) {
+            console.error('Gagal simpan history (async):', e.message);
+        } finally {
+            saveInFlight = false;
+            saveInFlightPromise = null;
+        }
+    })();
+    saveInFlightPromise = work;
+    return work;
 }
 function scheduleSave() {
     if (saveTimer) return;
@@ -162,20 +168,27 @@ function scheduleSave() {
 }
 
 // Simpan history pas mau mati (pm2 restart kirim SIGINT) biar obrolan ga ilang.
-function shutdown(sig) {
+async function shutdown(sig) {
     console.log(`\n${sig} diterima — simpan history lalu keluar.`);
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    // Anti race: kalau async save lagi jalan, dia bakal write+rename tmp file
-    // sendiri. Sync save di sini bakal ngerebut tmp file dan korup. Skip.
-    if (saveInFlight) {
-        console.log('Async save in-flight, skip sync save (let async finish).');
+    // Anti race: kalau async save lagi jalan, jangan ngerebut tmp file (atomic rename pun bisa
+    // ngehapus data terbaru kalau process exit sebelum write selesai). Await promise-nya
+    // langsung, capped 5s biar PM2 ga lama bunuh kita.
+    if (saveInFlightPromise) {
+        console.log('Async save in-flight, await up to 5s...');
+        try {
+            await Promise.race([
+                saveInFlightPromise,
+                new Promise((r) => setTimeout(r, 5000))
+            ]);
+        } catch { /* ignore — exit anyway */ }
     } else {
         saveHistory();
     }
     process.exit(0);
 }
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => { shutdown('SIGINT'); });
+process.on('SIGTERM', () => { shutdown('SIGTERM'); });
 
 // Global crash guard — jangan biarin bot mati gara2 1 promise reject yg lolos.
 process.on('unhandledRejection', (reason) => {
@@ -826,9 +839,11 @@ async function webSearch(query) {
 }
 
 // SSRF guard: blokir loopback, link-local (cloud metadata 169.254.169.254),
-// dan RFC-1918 private ranges. Resolve hostname via DNS dulu — kalau ada
-// 1 record yang resolve ke private IP, tolak (anti DNS-rebinding).
+// dan RFC-1918 private ranges. Resolve hostname via DNS dulu, terus PIN IP yang aman
+// itu ke axios via custom lookup — kalau ga di-pin, attacker bisa flip DNS record
+// antara validasi & connect (DNS rebinding / TOCTOU bypass).
 const _dnsLookup = require('dns').promises.lookup;
+const _https = require('https');
 const _BLOCKED_NETS_V4 = [
     /^127\./,
     /^10\./,
@@ -839,34 +854,68 @@ const _BLOCKED_NETS_V4 = [
     /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,   // CGNAT 100.64.0.0/10
 ];
 const _BLOCKED_NETS_V6 = [/^::1$/, /^fc/i, /^fd/i, /^fe80:/i];
-async function _isSafeUrl(rawUrl) {
+function _isBlockedAddr(address, family) {
+    const blocked = family === 4 ? _BLOCKED_NETS_V4 : _BLOCKED_NETS_V6;
+    return blocked.some((r) => r.test(address));
+}
+// Resolve URL ke single IP yang aman. Return { ok, ip, family } atau { ok:false }.
+// Pick record pertama yang lolos blocklist; kalau ada record private, tolak total
+// (lebih aman drop-all daripada race). https-only.
+async function _resolveSafeUrl(rawUrl) {
     let parsed;
-    try { parsed = new URL(rawUrl); } catch { return false; }
-    if (parsed.protocol !== 'https:') return false;     // https-only, no cleartext
+    try { parsed = new URL(rawUrl); } catch { return { ok: false }; }
+    if (parsed.protocol !== 'https:') return { ok: false };
     const host = parsed.hostname.replace(/^\[|\]$/g, '');
     let addrs;
-    try { addrs = await _dnsLookup(host, { all: true }); } catch { return false; }
-    if (!addrs.length) return false;
-    return addrs.every(({ address, family }) => {
-        const blocked = family === 4 ? _BLOCKED_NETS_V4 : _BLOCKED_NETS_V6;
-        return !blocked.some((r) => r.test(address));
-    });
+    try { addrs = await _dnsLookup(host, { all: true }); } catch { return { ok: false }; }
+    if (!addrs.length) return { ok: false };
+    if (addrs.some(({ address, family }) => _isBlockedAddr(address, family))) return { ok: false };
+    const first = addrs[0];
+    return { ok: true, ip: first.address, family: first.family };
 }
+
+const MAX_REDIRECT_HOPS = 3;   // cap redirect chain biar ga jadi DoS vector
 
 async function webFetch(url) {
     try {
-        if (!(await _isSafeUrl(url))) {
-            return 'web_fetch: URL ditolak (harus HTTPS publik, bukan IP internal/private).';
+        let currentUrl = url;
+        let res = null;
+        for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+            const safe = await _resolveSafeUrl(currentUrl);
+            if (!safe.ok) {
+                return 'web_fetch: URL ditolak (harus HTTPS publik, bukan IP internal/private).';
+            }
+            // Pin IP — custom lookup biar TLS connect ke IP yg udah divalidasi, bukan
+            // re-resolve dari DNS (DNS rebinding mitigation). servername tetep dari
+            // hostname asli buat SNI/cert verification.
+            const pinnedAgent = new _https.Agent({
+                lookup: (_host, _opts, cb) => cb(null, safe.ip, safe.family),
+                keepAlive: false
+            });
+            res = await axios.get(currentUrl, {
+                headers: { 'User-Agent': UA },
+                timeout: 20000,
+                maxContentLength: MAX_FETCH_BYTES,
+                maxRedirects: 0,           // manual hop loop di atas, bukan axios
+                responseType: 'text',
+                transformResponse: (x) => x,
+                validateStatus: () => true,
+                httpsAgent: pinnedAgent
+            });
+            // 3xx? validasi target redirect ulang sebelum hop.
+            if (res.status >= 300 && res.status < 400 && res.headers.location) {
+                if (hop === MAX_REDIRECT_HOPS) {
+                    return 'web_fetch: kebanyakan redirect (max 3).';
+                }
+                try {
+                    currentUrl = new URL(res.headers.location, currentUrl).toString();
+                } catch {
+                    return 'web_fetch: redirect target invalid.';
+                }
+                continue;
+            }
+            break;
         }
-        const res = await axios.get(url, {
-            headers: { 'User-Agent': UA },
-            timeout: 20000,
-            maxContentLength: MAX_FETCH_BYTES,
-            maxRedirects: 3,
-            responseType: 'text',
-            transformResponse: (x) => x,
-            validateStatus: () => true   // biar agent bisa baca body 403/404, ga throw mentah.
-        });
         const status = res.status;
         const ct = (res.headers['content-type'] || '').toLowerCase();
         let text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
@@ -875,7 +924,7 @@ async function webFetch(url) {
         const MAX = 7000;
         if (text.length > MAX) text = text.slice(0, MAX) + '\n...[dipotong, terlalu panjang]';
         if (status >= 400) {
-            return `[HTTP ${status}] ${url}\nPindah sumber lain, JANGAN retry URL ini.\n\n${text.slice(0, 600) || '(body kosong)'}`;
+            return `[HTTP ${status}] ${currentUrl}\nPindah sumber lain, JANGAN retry URL ini.\n\n${text.slice(0, 600) || '(body kosong)'}`;
         }
         return text || '(halaman kosong)';
     } catch (e) {
@@ -1360,7 +1409,7 @@ bot.on('message', async (msg) => {
     if (!chatHistory[key]) chatHistory[key] = [{ role: 'system', content: SYSTEM_PROMPT }];
     // Anti META-tag spoofing: strip [META ...] block dari semua user-controlled
     // input sebelum di-concat di belakang server-controlled metaTag asli.
-    const stripMeta = (s) => String(s || '').replace(/\[META\s[^\]]*\]/gi, '[meta-filtered]');
+    const stripMeta = (s) => String(s || '').replace(/\[META(?:\s[^\]]*)?\]/gi, '[meta-filtered]');
     const safeName = stripMeta(displayName(msg.from) || 'anon').slice(0, 40);
     const metaTag = `[META role=${isAdmin(userId) ? 'owner' : 'user'} name=${safeName}]\n`;
     const safePromptText = stripMeta(promptText);
