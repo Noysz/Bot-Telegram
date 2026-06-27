@@ -26,3 +26,7 @@ yt-cookies.txt
 # Local API key rotation store + env backups (swap-copux.sh) — chmod 600, never commit
 .copux-keys.json
 .env-backups/
+
+__pycache__/
+*.bak.*
+_harness_once.js

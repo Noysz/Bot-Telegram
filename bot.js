@@ -48,6 +48,25 @@ const MAX_CONCURRENT_LLM = Math.max(1, parseInt(process.env.MAX_CONCURRENT_LLM |
 const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(2 * 1024 * 1024), 10);   // 2 MB (3 concurrent × base64 = ~8 MB; jangan OOM Termux)
 const MAX_FETCH_BYTES = parseInt(process.env.MAX_FETCH_BYTES || String(4 * 1024 * 1024), 10);
 
+// === VIDEO "nonton" (frame + transcript audio) ===
+// Telegram Bot API getFile cap ~20MB, jadi MAX_VIDEO_BYTES jangan di atas itu.
+const MAX_VIDEO_BYTES = parseInt(process.env.MAX_VIDEO_BYTES || String(20 * 1024 * 1024), 10);
+const MAX_AUDIO_SEC = parseInt(process.env.MAX_AUDIO_SEC || '180', 10);            // cap durasi transcribe = bound OOM/runtime
+const YTDLP_TIMEOUT_MS = parseInt(process.env.YTDLP_TIMEOUT_MS || '120000', 10);
+const WHISPER_TIMEOUT_MS = parseInt(process.env.WHISPER_TIMEOUT_MS || '180000', 10);
+const WHISPER_BIN = process.env.WHISPER_BIN || '/root/whisper.cpp/build/bin/whisper-cli';
+const WHISPER_MODEL = process.env.WHISPER_MODEL || '/root/whisper.cpp/models/ggml-base.bin';
+const MAX_TRANSCRIPT_CHARS = parseInt(process.env.MAX_TRANSCRIPT_CHARS || '4000', 10);
+// Semaphore kecil: cap kerja ffmpeg/whisper paralel biar 3 video bareng ga peg CPU Termux.
+const MAX_CONCURRENT_VIDEO = Math.max(1, parseInt(process.env.MAX_CONCURRENT_VIDEO || '1', 10));
+// Scrapling microservice (anti-bot web_fetch). Kosongin SCRAPLING_FETCH_URL buat disable.
+const SCRAPLING_FETCH_URL = process.env.SCRAPLING_FETCH_URL || 'http://127.0.0.1:8765/fetch';
+const SCRAPLING_TIMEOUT_MS = parseInt(process.env.SCRAPLING_TIMEOUT_MS || '28000', 10);
+// Allowlist host video non-YT (selain ekstensi langsung). Konservatif — bukan "any URL".
+const VIDEO_HOST_ALLOWLIST = (process.env.VIDEO_HOST_ALLOWLIST ||
+    'tiktok.com,vt.tiktok.com,vm.tiktok.com,vimeo.com,streamable.com,twitter.com,x.com,instagram.com,reddit.com,v.redd.it')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
 const DATA_DIR = path.join(__dirname, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const ADDFIX_FILE = path.join(DATA_DIR, 'addfix.jsonl');
@@ -439,6 +458,15 @@ URUTAN: kb_lookup → web_search → web_fetch.
 - web_fetch ke URL hasil search atau endpoint resmi.
 - Sapaan/obrolan ringan → jawab langsung, JANGAN call tool.
 - web_search throttled/kosong → JANGAN ulang, langsung web_fetch URL yg valid.
+- CHANGELOG / RELEASE NOTES / "ada update apa" (berlaku buat SEMUA emulator, bukan cuma yang ada di KB): URUTAN WAJIB:
+  1. kb_lookup dulu.
+  2. web_search SEKALI dengan query "<nama emulator> <versi> changelog release github".
+  3. Dari hasil search: ambil URL GitHub yang muncul (bisa github.com/<owner>/<repo>/releases atau repo page). "TAU repo" = URL yang BENERAN muncul di hasil search — BUKAN asosiasi dari KB atau tebakan.
+  4. Fetch GitHub API: SELALU mulai dari \`/releases\` atau \`/releases/latest\` — JANGAN construct \`/releases/tags/<versi-dari-user>\` karena tag name bisa beda (v3.1, 3.1.0, 3.1-hotfix, dll). Biarkan API yang kasih tag name aslinya.
+  5. Kalau search return beberapa repo kandidat (fork beda maintainer) → fetch releases dari SEMUA kandidat yang relevan (max 3), bandingkan, rangkum.
+  6. Kalau search return Reddit/Telegram post tentang release → web_fetch juga (Reddit: tambah .json).
+  7. DILARANG nyerah sebelum semua kandidat dari search dicoba. Nyerah HANYA kalau semua return 404/empty.
+  INGAT: web_search nyaris ga pernah ngindeks ISI release notes, tapi ngindeks URL-nya. Gunakan URL dari search → fetch API-nya.
 - Cantumin URL sumber di akhir jawaban kalau pake web.
 
 # SUMBER (endpoint yang JALAN)
@@ -446,6 +474,7 @@ URUTAN: kb_lookup → web_search → web_fetch.
 - Steam: \`store.steampowered.com/api/appdetails?appids=<APPID>\`
 - ProtonDB: \`protondb.com/api/v1/reports/summaries/<APPID>.json\`
 - File teknis: \`raw.githubusercontent.com/<owner>/<repo>/<branch>/path\`
+- GitHub Releases/Changelog (API JSON, PRIMER buat changelog): \`api.github.com/repos/<owner>/<repo>/releases/latest\` | \`/releases/tags/<tag>\` | \`/releases\`
 - Reddit: URL + \`.json\` (HTML 403).
 - GitHub Issues debug: \`github.com/<owner>/<repo>/issues?q=<error+keyword>\`
 1 sumber 403/gagal → pindah sumber. DILARANG ngarang URL.
@@ -884,7 +913,37 @@ async function _resolveSafeUrl(rawUrl) {
 
 const MAX_REDIRECT_HOPS = 3;   // cap redirect chain biar ga jadi DoS vector
 
+// Coba scrapling microservice (anti-bot/Cloudflare) DULU. SSRF guard (_resolveSafeUrl)
+// WAJIB lolos sebelum URL dioper — scrapling/playwright resolve DNS sendiri, jadi tanpa
+// gate ini IP-pinning ke-bypass. Return string hasil, atau null (caller fallback axios).
+async function tryScraplingFetch(rawUrl) {
+    if (!SCRAPLING_FETCH_URL) return null;
+    const safe = await _resolveSafeUrl(rawUrl);
+    if (!safe.ok) return null;   // bukan https publik / IP internal → jangan oper ke scrapling
+    try {
+        const r = await axios.post(SCRAPLING_FETCH_URL,
+            { url: rawUrl, ip: safe.ip },
+            { timeout: SCRAPLING_TIMEOUT_MS, validateStatus: () => true });
+        const d = r.data;
+        if (!d || !d.ok || typeof d.text !== 'string') return null;
+        let text = d.text.replace(/\n{3,}/g, '\n\n').trim();
+        const MAX = 7000;
+        if (text.length > MAX) text = text.slice(0, MAX) + '\n...[dipotong, terlalu panjang]';
+        const status = d.status || 0;
+        if (status >= 400) {
+            return `[HTTP ${status}] ${rawUrl}\nPindah sumber lain, JANGAN retry URL ini.\n\n${text.slice(0, 600) || '(body kosong)'}`;
+        }
+        return text || null;   // kosong → biar axios fallback coba
+    } catch (e) {
+        // service mati/timeout → fallback axios. JANGAN echo detail.
+        return null;
+    }
+}
+
 async function webFetch(url) {
+    // Scrapling dulu (lebih jago nembus anti-bot). Gagal/mati → fallback axios di bawah.
+    const viaScrapling = await tryScraplingFetch(url);
+    if (viaScrapling) return viaScrapling;
     try {
         let currentUrl = url;
         let res = null;
@@ -897,7 +956,13 @@ async function webFetch(url) {
             // re-resolve dari DNS (DNS rebinding mitigation). servername tetep dari
             // hostname asli buat SNI/cert verification.
             const pinnedAgent = new _https.Agent({
-                lookup: (_host, _opts, cb) => cb(null, safe.ip, safe.family),
+                // Node 20+ nyalain autoSelectFamily default → connect manggil lookup
+                // dengan { all: true } dan NGAREP balikan array. Kalau cuma balikin
+                // (ip, family) gaya lama → ERR_INVALID_IP_ADDRESS (web_fetch mati total).
+                // Handle dua-duanya; tetep pin ke 1 IP tervalidasi (anti DNS-rebinding).
+                lookup: (_host, opts, cb) => (opts && opts.all)
+                    ? cb(null, [{ address: safe.ip, family: safe.family }])
+                    : cb(null, safe.ip, safe.family),
                 keepAlive: false
             });
             res = await axios.get(currentUrl, {
@@ -1121,8 +1186,49 @@ async function chatCompletion(messages, useTools, hasImage) {
 
 // MiniMax-M3 wraps reasoning in <think>...</think>. Strip before Telegram.
 // freemodel/GPT-5.5 ga punya quirk ini, regex no-op kalau ga match.
+// Sekalian buang sisa sintaks tool-call (kalau ada model copux-stack yg
+// ngeluarin <function>/<tool_call> sebagai teks) biar GA PERNAH bocor ke user.
 function stripThink(text) {
-    return text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '').trim();
+    return text
+        .replace(/<think>[\s\S]*?<\/think>\s*/gi, '')
+        .replace(/<function\b[\s\S]*?<\/function>\s*/gi, '')
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>\s*/gi, '')
+        .trim();
+}
+
+// Sebagian model di copux-stack (stack multi-model) balikin tool-call sebagai
+// TEKS inline, bukan field structured `m.tool_calls`. Format yang kelihat:
+//   <function>name{json}</function>        (observed di prod)
+//   <function=name>{json}</function>       (gaya Hermes)
+//   <tool_call>{"name":..,"arguments":..}</tool_call>   (gaya Qwen)
+// Tanpa parser ini, blok itu bocor mentah ke user DAN tool-nya ga pernah jalan.
+// Cuma tool yg emang keregistrasi yg dieksekusi (whitelist) — sisanya diabaikan.
+function parseTextToolCalls(text) {
+    if (!text || text.indexOf('<') === -1) return [];
+    const known = new Set(['kb_lookup', 'web_search', 'web_fetch']);
+    const calls = [];
+    let mm;
+
+    // 1) <function>name{json}</function>  atau  <function=name>{json}</function>
+    const fnRe = /<function(?:=([a-z_]+))?>\s*([a-z_]+)?\s*(\{[\s\S]*?\})\s*<\/function>/gi;
+    while ((mm = fnRe.exec(text)) !== null) {
+        const name = (mm[1] || mm[2] || '').trim().toLowerCase();
+        if (!known.has(name)) continue;
+        try { calls.push({ name, args: JSON.parse(mm[3]) }); } catch (e) { /* malformed → skip */ }
+    }
+
+    // 2) <tool_call>{"name":..,"arguments":..}</tool_call>
+    const tcRe = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/gi;
+    while ((mm = tcRe.exec(text)) !== null) {
+        let obj;
+        try { obj = JSON.parse(mm[1]); } catch (e) { continue; }
+        const name = String(obj.name || '').trim().toLowerCase();
+        if (!known.has(name)) continue;
+        let args = obj.arguments || obj.args || {};
+        if (typeof args === 'string') { try { args = JSON.parse(args); } catch (e) { args = {}; } }
+        calls.push({ name, args });
+    }
+    return calls;
 }
 
 // Model boleh manggil web_search/web_fetch beberapa kali sebelum jawab final.
@@ -1186,7 +1292,29 @@ async function runAgent(key, images) {
             }
             continue;
         }
-        if (m.content && m.content.trim()) return stripThink(m.content);
+        // FALLBACK: sebagian model copux-stack balikin tool-call sebagai TEKS
+        // inline (bukan m.tool_calls). Parse, jalanin tool-nya, jangan bocor.
+        if (!lastRound && m.content) {
+            const textCalls = parseTextToolCalls(m.content);
+            if (textCalls.length) {
+                let feedback = '';
+                for (const call of textCalls) {
+                    const result = await runTool(call.name, call.args || {});
+                    console.log(`[${key}] 🔧(text) ${call.name}(${JSON.stringify(call.args || {}).slice(0, 90)})`);
+                    feedback += `[hasil ${call.name}]\n${result}\n\n`;
+                }
+                working.push({ role: 'user', content: `${feedback}Pakai data di atas buat jawab pertanyaan user. Tulis jawaban final dalam teks biasa — JANGAN keluarin sintaks <function>/<tool_call>.` });
+                continue;
+            }
+        }
+        if (m.content && m.content.trim()) {
+            const clean = stripThink(m.content);
+            if (clean) return clean;
+            // content cuma sisa sintaks tool yg ga keparse → jangan bocorin
+            if (lastRound) return '(gw nyoba ngambil data tapi formatnya gagal — coba tanya ulang ya)';
+            working.push({ role: 'user', content: 'Tulis jawaban final dalam teks biasa, tanpa sintaks tool.' });
+            continue;
+        }
         // Empty content di lastRound = exit fallback; ga ada gunanya nge-nudge lagi.
         if (lastRound) return '(model ngasih response kosong di round terakhir, coba kirim ulang)';
         working.push({ role: 'user', content: 'Tulis jawaban finalnya sekarang dalam teks ya.' });
@@ -1204,20 +1332,134 @@ function run(cmd, args, ms) {
     });
 }
 
+// ---- Video semaphore: cap kerja ffmpeg/whisper paralel (anti CPU-peg Termux) ----
+let videoInFlight = 0;
+const videoWaiters = [];
+function acquireVideoSlot() {
+    if (videoInFlight < MAX_CONCURRENT_VIDEO) { videoInFlight++; return Promise.resolve(); }
+    return new Promise((resolve) => videoWaiters.push(resolve));
+}
+function releaseVideoSlot() {
+    if (videoWaiters.length) videoWaiters.shift()();
+    else videoInFlight = Math.max(0, videoInFlight - 1);
+}
+
+// Ekstrak 6 frame dari file video -> array data-URI jpg. Dipakai bareng YT + upload.
+async function extractFrames(videoPath, dir) {
+    await run('ffmpeg', ['-y', '-i', videoPath, '-vf', 'fps=1/12,scale=512:-1', '-frames:v', '6', `${dir}/f%02d.jpg`], 60000);
+    const files = fs.readdirSync(dir).filter((f) => /^f\d+\.jpg$/.test(f)).sort().slice(0, 6);
+    // Async readFile paralel — di Termux ARM low-end, 6× sync readFile blocking 100-300ms.
+    const bufs = await Promise.all(files.map((f) => fs.promises.readFile(`${dir}/${f}`)));
+    return bufs.map((b) => `data:image/jpeg;base64,${b.toString('base64')}`);
+}
+
+// Ekstrak audio -> whisper.cpp -> transcript string. Best-effort: '' kalau gagal /
+// video bisu / whisper ga ada. NGGAK pernah throw ke caller (request tetep jalan).
+async function extractAudioTranscript(videoPath, dir) {
+    try {
+        // Cek ada audio stream dulu (video bisu -> skip whisper, hemat CPU).
+        // ffprobe nulis 'audio' ke stdout kalau ada; pakai execFile sync-ish via run+file.
+        await run('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', '-o', `${dir}/probe.txt`, videoPath], 15000)
+            .catch(() => {});
+        let hasAudio = false;
+        try { hasAudio = /audio/.test(fs.readFileSync(`${dir}/probe.txt`, 'utf8')); } catch { hasAudio = false; }
+        // ffprobe -o ga universal; fallback: kalau probe.txt ga kebikin, coba transcribe aja.
+        if (!fs.existsSync(`${dir}/probe.txt`)) hasAudio = true;
+        if (!hasAudio) return '';
+
+        const wav = `${dir}/a.wav`;
+        await run('ffmpeg', ['-y', '-i', videoPath, '-vn', '-ac', '1', '-ar', '16000', '-t', String(MAX_AUDIO_SEC), wav], 60000);
+        if (!fs.existsSync(wav)) return '';
+        if (!fs.existsSync(WHISPER_BIN) || !fs.existsSync(WHISPER_MODEL)) return '';
+
+        await run(WHISPER_BIN, ['-m', WHISPER_MODEL, '-f', wav, '-otxt', '-nt', '-l', 'auto', '-of', `${dir}/out`], WHISPER_TIMEOUT_MS);
+        let txt = '';
+        try { txt = fs.readFileSync(`${dir}/out.txt`, 'utf8'); } catch { txt = ''; }
+        txt = txt.replace(/\s+/g, ' ').trim();
+        if (txt.length > MAX_TRANSCRIPT_CHARS) txt = txt.slice(0, MAX_TRANSCRIPT_CHARS) + ' ...[dipotong]';
+        return txt;
+    } catch (e) {
+        console.error('transcript gagal:', e.code || e.message);
+        return '';
+    }
+}
+
+// Orkestrator: file video lokal -> { images, transcript }. mkdtemp + rmSync finally.
+// Frame & transcript independen — salah satu gagal, yang lain tetep balik.
+async function processVideoFile(localPath) {
+    fs.mkdirSync('/tmp/vid', { recursive: true });
+    const dir = fs.mkdtempSync('/tmp/vid/v-');
+    await acquireVideoSlot();
+    try {
+        let images = [];
+        try { images = await extractFrames(localPath, dir); } catch (e) { console.error('frames gagal:', e.code || e.message); }
+        const transcript = await extractAudioTranscript(localPath, dir);
+        return { images, transcript };
+    } finally {
+        releaseVideoSlot();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+// Validasi URL video non-YT: https-only + reject IP internal (reuse SSRF guard) +
+// allowlist host / ekstensi video. Return true kalau aman diproses yt-dlp.
+async function _isAllowedVideoUrl(rawUrl) {
+    let u;
+    try { u = new URL(rawUrl); } catch { return false; }
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const hostOk = VIDEO_HOST_ALLOWLIST.some((h) => host === h || host.endsWith('.' + h));
+    const extOk = /\.(mp4|webm|mkv|mov)(\?|$)/i.test(u.pathname + u.search);
+    if (!hostOk && !extOk) return false;
+    // SSRF: pastiin host ga resolve ke IP internal (DNS-rebinding-aware reuse).
+    const safe = await _resolveSafeUrl(rawUrl);
+    return !!safe.ok;
+}
+
+// Download video non-YT via yt-dlp (sandboxed flags) -> processVideoFile.
+// SSRF/abuse guard WAJIB lolos dulu. Return { images, transcript } atau null.
+async function processVideoUrl(url) {
+    if (!(await _isAllowedVideoUrl(url))) return null;
+    fs.mkdirSync('/tmp/vid', { recursive: true });
+    const dir = fs.mkdtempSync('/tmp/vid/u-');
+    try {
+        await run('yt-dlp', [
+            '--no-playlist', '--no-exec', '--no-continue',
+            '--max-filesize', '25M', '--match-filter', '!is_live',
+            '-f', 'worst[height>=240]/worst',
+            '-o', `${dir}/v.%(ext)s`, url
+        ], YTDLP_TIMEOUT_MS);
+        const vf = fs.readdirSync(dir).find((f) => f.startsWith('v.'));
+        if (!vf) return null;
+        return await processVideoFile(`${dir}/${vf}`);
+    } catch (e) {
+        console.error('video url gagal:', e.code || e.message);
+        return null;
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+// YT: download worst-quality -> frame + transcript. Butuh cookies (kalau IP keblok,
+// throw -> caller fallback thumbnail). Return { images, transcript }.
 async function ytFrames(id) {
     // mkdtempSync = dir unik per request, ga tabrakan kalau 2 user kirim ID sama bareng.
     fs.mkdirSync('/tmp/yt', { recursive: true });
-    const dir = fs.mkdtempSync(`/tmp/yt/${id}-`);
+    // Sanitize id buat prefix mkdtemp (regex izinin '-', jangan sampe jadi awalan path aneh).
+    const safeId = id.replace(/[^A-Za-z0-9_]/g, '_');
+    const dir = fs.mkdtempSync(`/tmp/yt/${safeId}-`);
+    await acquireVideoSlot();
     try {
-        await run('yt-dlp', ['--cookies', '/root/yt-cookies.txt', '--no-playlist', '-f', 'worst[height>=240]/worst', '-o', `${dir}/v.%(ext)s`, `https://youtu.be/${id}`], 150000);
+        // --max-filesize + --match-filter '!is_live': cegah live-stream / video raksasa
+        // nahan slot semaphore sampe timeout (DoS) + isi disk.
+        await run('yt-dlp', ['--cookies', '/root/yt-cookies.txt', '--no-playlist', '--no-exec', '--max-filesize', '25M', '--match-filter', '!is_live', '-f', 'worst[height>=240]/worst', '-o', `${dir}/v.%(ext)s`, `https://youtu.be/${id}`], YTDLP_TIMEOUT_MS);
         const vf = fs.readdirSync(dir).find((f) => f.startsWith('v.'));
         if (!vf) throw new Error('video ga keunduh');
-        await run('ffmpeg', ['-y', '-i', `${dir}/${vf}`, '-vf', 'fps=1/12,scale=512:-1', '-frames:v', '6', `${dir}/f%02d.jpg`], 60000);
-        const files = fs.readdirSync(dir).filter((f) => /^f\d+\.jpg$/.test(f)).sort().slice(0, 6);
-        // Async readFile paralel — di Termux ARM low-end, 6× sync readFile blocking 100-300ms.
-        const bufs = await Promise.all(files.map((f) => fs.promises.readFile(`${dir}/${f}`)));
-        return bufs.map((b) => `data:image/jpeg;base64,${b.toString('base64')}`);
+        const images = await extractFrames(`${dir}/${vf}`, dir);
+        const transcript = await extractAudioTranscript(`${dir}/${vf}`, dir);
+        return { images, transcript };
     } finally {
+        releaseVideoSlot();
         fs.rmSync(dir, { recursive: true, force: true });
     }
 }
@@ -1230,11 +1472,11 @@ async function processYouTube(url) {
         const o = await axios.get(`https://www.youtube.com/oembed?url=https://youtu.be/${id}&format=json`, { timeout: 10000 });
         meta = `Judul: ${o.data.title}\nChannel: ${o.data.author_name}`;
     } catch (e) { /* metadata opsional */ }
-    let images = [], mode = 'meta';
+    let images = [], mode = 'meta', transcript = '';
     if (fs.existsSync('/root/yt-cookies.txt')) {
         try {
             const fr = await ytFrames(id);
-            if (fr.length) { images = fr; mode = 'frames'; }
+            if (fr.images.length) { images = fr.images; mode = 'frames'; transcript = fr.transcript || ''; }
         } catch (e) { console.error('YT frames gagal:', e.message); }
     }
     if (!images.length) {
@@ -1244,7 +1486,7 @@ async function processYouTube(url) {
             mode = 'thumbnail';
         } catch (e) { /* thumbnail opsional */ }
     }
-    return { meta, images, mode };
+    return { meta, images, mode, transcript };
 }
 
 // =============================================================================
@@ -1298,7 +1540,15 @@ bot.on('message', async (msg) => {
     const userId = msg.from ? msg.from.id : null;
     const key = sessionKey(msg);
     const text = msg.text || msg.caption || '';
-    const documentToProcess = msg.document || (msg.reply_to_message ? msg.reply_to_message.document : null);
+    const rawDoc = msg.document || (msg.reply_to_message ? msg.reply_to_message.document : null);
+    // Video doc (mime video/*) di-route ke pipeline video, BUKAN text-file reader.
+    const isVideoDoc = !!(rawDoc && /^video\//i.test(rawDoc.mime_type || ''));
+    const documentToProcess = isVideoDoc ? null : rawDoc;
+    // Sumber video: msg.video / video_note / dokumen ber-mime video (juga dari reply).
+    const videoToProcess = msg.video
+        || msg.video_note
+        || (msg.reply_to_message ? (msg.reply_to_message.video || msg.reply_to_message.video_note) : null)
+        || (isVideoDoc ? rawDoc : null);
 
     lastActive[key] = Date.now();
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
@@ -1514,7 +1764,59 @@ bot.on('message', async (msg) => {
         }
     }
 
-    // 2) Link YouTube — strip trailing punctuation supaya regex ga grab tanda baca
+    // 2) Video upload Telegram (msg.video / video_note / dokumen video) — frame + transcript.
+    //    Stream-to-disk (BUKAN arraybuffer) biar 20MB ×3 concurrent ga OOM Termux.
+    if (videoToProcess) {
+        if (videoToProcess.file_size && videoToProcess.file_size > MAX_VIDEO_BYTES) {
+            sendSafe(chatId, `⚠️ Videonya kegedean (maks ${Math.round(MAX_VIDEO_BYTES / 1024 / 1024)}MB). Kirim yang lebih pendek/kecil ya.`);
+            return;
+        }
+        fs.mkdirSync('/tmp/vid', { recursive: true });
+        const dlDir = fs.mkdtempSync('/tmp/vid/dl-');
+        const dlPath = `${dlDir}/in`;
+        try {
+            const link = await bot.getFileLink(videoToProcess.file_id);
+            await withTyping(chatId, async () => {
+                const res = await axios.get(link, { responseType: 'stream', maxContentLength: MAX_VIDEO_BYTES });
+                await new Promise((resolve, reject) => {
+                    const ws = fs.createWriteStream(dlPath);
+                    // maxContentLength cuma cek header content-length; server bisa boong /
+                    // ga kirim header. Counter manual = hard cap byte aktual (anti OOM/disk).
+                    let received = 0;
+                    res.data.on('data', (chunk) => {
+                        received += chunk.length;
+                        if (received > MAX_VIDEO_BYTES) {
+                            res.data.destroy();
+                            ws.destroy();
+                            reject(new Error('video stream melebihi batas'));
+                        }
+                    });
+                    res.data.pipe(ws);
+                    res.data.on('error', reject);
+                    ws.on('error', reject);
+                    ws.on('finish', resolve);
+                });
+                const vid = await processVideoFile(dlPath);
+                if (vid.images.length) {
+                    images.push(...vid.images);
+                    promptText += `\n\n[VIDEO USER]\n[Kamu dikasih ${vid.images.length} FRAME dari video yang user kirim. Analisa visualnya.]`;
+                }
+                if (vid.transcript) {
+                    promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${vid.transcript}\n[Hasil transcribe audio video user. Gabung sama frame visual buat jawab.]`;
+                }
+                if (!vid.images.length && !vid.transcript) {
+                    promptText += '\n\n[VIDEO USER]\n[Video diterima tapi gagal diproses (frame & audio ga keambil). Jujur bilang ke user.]';
+                }
+            });
+        } catch (err) {
+            console.error('video upload gagal:', err.code || err.message);
+            promptText += '\n\n[VIDEO USER]\n[Gagal proses video (kegedean/format/timeout). Jujur bilang ke user.]';
+        } finally {
+            fs.rmSync(dlDir, { recursive: true, force: true });
+        }
+    }
+
+    // 3) Link YouTube — strip trailing punctuation supaya regex ga grab tanda baca
     let ytUrl = (promptText.match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i) || [])[0];
     if (ytUrl) ytUrl = ytUrl.replace(/[.,;:!?)\]}"']+$/, '');
     if (ytUrl) {
@@ -1528,6 +1830,27 @@ bot.on('message', async (msg) => {
                 promptText += `\n\n[KONTEN YOUTUBE]\n${yt.meta}\n[${seen}]`;
             } else {
                 promptText += `\n\n[KONTEN YOUTUBE]\n${yt.meta}\n[Thumbnail & video ga keambil; cuma judul yang ada. Jujur ke user soal keterbatasan ini.]`;
+            }
+            if (yt.transcript) {
+                promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${yt.transcript}\n[Hasil transcribe audio video YouTube. Gabung sama frame visual buat jawab.]`;
+            }
+        }
+    }
+
+    // 4) Link video non-YT (tiktok/vimeo/mp4/dll) — allowlist + SSRF guard di dalam.
+    if (!ytUrl && !videoToProcess) {
+        let vUrl = (promptText.match(/https:\/\/[^\s]+/i) || [])[0];
+        if (vUrl) vUrl = vUrl.replace(/[.,;:!?)\]}"']+$/, '');
+        if (vUrl && (await _isAllowedVideoUrl(vUrl))) {
+            const vid = await withTyping(chatId, () => processVideoUrl(vUrl));
+            if (vid && (vid.images.length || vid.transcript)) {
+                if (vid.images.length) {
+                    images.push(...vid.images);
+                    promptText += `\n\n[VIDEO LINK]\n[Kamu dikasih ${vid.images.length} FRAME dari video di link ini. Analisa visualnya.]`;
+                }
+                if (vid.transcript) {
+                    promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${vid.transcript}\n[Hasil transcribe audio video dari link. Gabung sama frame visual buat jawab.]`;
+                }
             }
         }
     }
@@ -1589,3 +1912,7 @@ bot.on('message', async (msg) => {
 });
 
 console.log('🚀 Bot COPUX-FourFect (gabungan V1+V2) startup…');
+
+if (process.env.HARNESS_MODE) {
+    module.exports = { chatHistory, runAgent, SYSTEM_PROMPT };
+}
