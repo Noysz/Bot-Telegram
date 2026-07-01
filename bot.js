@@ -35,6 +35,14 @@ bot.getMe().then((me) => {
     console.log(`✅  Bot @${me.username} (id ${me.id}) siap.`);
 }).catch((e) => console.error('Gagal getMe:', e.message));
 
+bot.on('polling_error', (e) => {
+    const msg = String((e && e.message) || e || '')
+        .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
+        .replace(/\s+/g, ' ')
+        .slice(0, 180);
+    console.error(`polling_error: ${e && e.code ? e.code : 'ERR'} ${msg}`);
+});
+
 // Provider routing: both vision & text-only → freemodel (TokenRouter/MiniMax-M3 stopped free tokens 2026-06-24).
 const VISION_MODEL = process.env.VISION_MODEL || 'gpt-5.5';
 const TEXT_MODEL = process.env.TEXT_MODEL || 'gpt-5.5';
@@ -62,6 +70,11 @@ const MAX_CONCURRENT_VIDEO = Math.max(1, parseInt(process.env.MAX_CONCURRENT_VID
 // Scrapling microservice (anti-bot web_fetch). Kosongin SCRAPLING_FETCH_URL buat disable.
 const SCRAPLING_FETCH_URL = process.env.SCRAPLING_FETCH_URL || 'http://127.0.0.1:8765/fetch';
 const SCRAPLING_TIMEOUT_MS = parseInt(process.env.SCRAPLING_TIMEOUT_MS || '28000', 10);
+// Firecrawl fallback buat web_fetch saat direct fetch kena anti-bot/JS-heavy page.
+const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY || '';
+const FIRECRAWL_API_URL = process.env.FIRECRAWL_API_URL || 'https://api.firecrawl.dev/v2/scrape';
+const FIRECRAWL_TIMEOUT_MS = parseInt(process.env.FIRECRAWL_TIMEOUT_MS || '45000', 10);
+const FIRECRAWL_MAX_AGE_MS = parseInt(process.env.FIRECRAWL_MAX_AGE_MS || String(60 * 60 * 1000), 10);
 // Allowlist host video non-YT (selain ekstensi langsung). Konservatif — bukan "any URL".
 const VIDEO_HOST_ALLOWLIST = (process.env.VIDEO_HOST_ALLOWLIST ||
     'tiktok.com,vt.tiktok.com,vm.tiktok.com,vimeo.com,streamable.com,twitter.com,x.com,instagram.com,reddit.com,v.redd.it')
@@ -809,11 +822,17 @@ function htmlToText(html) {
         .trim();
 }
 
+const withTimeout = (promise, ms) => {
+    let timer;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('Timeout')), ms); });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
+
 async function serperSearch(query) {
-    const res = await axios.post('https://google.serper.dev/search',
+    const res = await withTimeout(axios.post('https://google.serper.dev/search',
         { q: query, num: 6 },
         { headers: { 'X-API-KEY': process.env.SERPER_API_KEY, 'Content-Type': 'application/json' }, timeout: 15000 }
-    );
+    ), 15500);
     const items = (res.data && res.data.organic) || [];
     if (!items.length) return null;
     return items.slice(0, 6).map((r, i) =>
@@ -822,10 +841,10 @@ async function serperSearch(query) {
 }
 
 async function tavilySearch(query) {
-    const res = await axios.post('https://api.tavily.com/search',
+    const res = await withTimeout(axios.post('https://api.tavily.com/search',
         { api_key: process.env.TAVILY_API_KEY, query, max_results: 6, search_depth: 'basic' },
         { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
-    );
+    ), 15500);
     const items = (res.data && res.data.results) || [];
     if (!items.length) return null;
     return items.slice(0, 6).map((r, i) =>
@@ -834,7 +853,7 @@ async function tavilySearch(query) {
 }
 
 async function ddgSearch(query) {
-    const res = await axios.get('https://html.duckduckgo.com/html/', {
+    const res = await withTimeout(axios.get('https://html.duckduckgo.com/html/', {
         params: { q: query },
         headers: { 'User-Agent': UA },
         timeout: 15000,
@@ -842,7 +861,7 @@ async function ddgSearch(query) {
         responseType: 'text',
         transformResponse: (x) => x,
         validateStatus: () => true
-    });
+    }), 15500);
     if (res.status === 202 || /anomaly|unusual traffic/i.test(res.data || '')) return null;
     const out = [];
     const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
@@ -872,7 +891,7 @@ async function webSearch(query) {
             console.error(`search ${name} gagal: ${e.message}`);
         }
     }
-    return 'web_search lagi ga tersedia (semua search engine nge-throttle/limit). JANGAN ulang web_search; langsung pakai web_fetch ke URL sumber yang relevan — contoh: https://raw.githubusercontent.com/doitsujin/dxvk/master/dxvk.conf , https://www.pcgamingwiki.com/wiki/<Nama_Game> , atau halaman /releases driver yang cocok sama GPU-nya.';
+    return 'web_search lagi ga tersedia (semua search engine nge-throttle/limit). JANGAN ulang web_search dan JANGAN karang URL. Kalau sudah ada URL valid dari user/history/tool result, baru pakai web_fetch ke URL itu. Kalau belum ada URL, jawab dari KB/pengetahuan yang ada dengan confidence rendah dan minta user kirim link/log kalau butuh verifikasi.';
 }
 
 // SSRF guard: blokir loopback, link-local (cloud metadata 169.254.169.254),
@@ -940,6 +959,52 @@ async function tryScraplingFetch(rawUrl) {
     }
 }
 
+// Firecrawl dipakai sebagai fallback berbayar/credit-based setelah fetch lokal gagal.
+// Tetap gate lewat _resolveSafeUrl supaya URL private/internal tidak pernah dikirim ke pihak ketiga.
+async function tryFirecrawlFetch(rawUrl) {
+    if (!FIRECRAWL_API_KEY) return null;
+    const safe = await _resolveSafeUrl(rawUrl);
+    if (!safe.ok) return null;
+    try {
+        const r = await axios.post(FIRECRAWL_API_URL, {
+            url: rawUrl,
+            formats: ['markdown'],
+            onlyMainContent: true,
+            maxAge: FIRECRAWL_MAX_AGE_MS,
+            timeout: FIRECRAWL_TIMEOUT_MS
+        }, {
+            headers: {
+                Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: FIRECRAWL_TIMEOUT_MS + 5000,
+            maxContentLength: MAX_FETCH_BYTES,
+            validateStatus: () => true
+        });
+        const d = r.data || {};
+        const metadata = (d.data && d.data.metadata) || {};
+        const status = metadata.statusCode || r.status || 0;
+        let text = (d.data && (d.data.markdown || d.data.html || d.data.rawHtml)) || '';
+        if (typeof text !== 'string') text = JSON.stringify(text);
+        if (/^\s*</.test(text)) text = htmlToText(text);
+        text = text.replace(/\n{3,}/g, '\n\n').trim();
+        const MAX = 7000;
+        if (text.length > MAX) text = text.slice(0, MAX) + '\n...[dipotong, terlalu panjang]';
+        if (!d.success || status >= 400) {
+            if (text) {
+                return `[Firecrawl HTTP ${status || r.status}] ${rawUrl}\nPindah sumber lain, JANGAN retry URL ini.\n\n${text.slice(0, 600)}`;
+            }
+            return null;
+        }
+        if (!text) return null;
+        console.log('🔥 web_fetch via Firecrawl');
+        return text;
+    } catch (e) {
+        console.error('Firecrawl fetch gagal:', e.code || e.message);
+        return null;
+    }
+}
+
 async function webFetch(url) {
     // Scrapling dulu (lebih jago nembus anti-bot). Gagal/mati → fallback axios di bawah.
     const viaScrapling = await tryScraplingFetch(url);
@@ -997,12 +1062,20 @@ async function webFetch(url) {
         const MAX = 7000;
         if (text.length > MAX) text = text.slice(0, MAX) + '\n...[dipotong, terlalu panjang]';
         if (status >= 400) {
+            const viaFirecrawl = await tryFirecrawlFetch(currentUrl);
+            if (viaFirecrawl) return viaFirecrawl;
             return `[HTTP ${status}] ${currentUrl}\nPindah sumber lain, JANGAN retry URL ini.\n\n${text.slice(0, 600) || '(body kosong)'}`;
+        }
+        if (!text) {
+            const viaFirecrawl = await tryFirecrawlFetch(currentUrl);
+            if (viaFirecrawl) return viaFirecrawl;
         }
         return text || '(halaman kosong)';
     } catch (e) {
         // JANGAN echo e.message — bisa leak IP:port/host (SSRF probe confirmation).
         console.error('webFetch error:', e.code || e.message);
+        const viaFirecrawl = await tryFirecrawlFetch(url);
+        if (viaFirecrawl) return viaFirecrawl;
         return 'web_fetch gagal: gagal ambil URL (timeout/network/dns).';
     }
 }
@@ -1362,7 +1435,12 @@ async function extractAudioTranscript(videoPath, dir) {
         await run('ffprobe', ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', '-o', `${dir}/probe.txt`, videoPath], 15000)
             .catch(() => {});
         let hasAudio = false;
-        try { hasAudio = /audio/.test(fs.readFileSync(`${dir}/probe.txt`, 'utf8')); } catch { hasAudio = false; }
+        try {
+            const probeData = await fs.promises.readFile(`${dir}/probe.txt`, 'utf8');
+            hasAudio = /audio/.test(probeData);
+        } catch {
+            hasAudio = false;
+        }
         // ffprobe -o ga universal; fallback: kalau probe.txt ga kebikin, coba transcribe aja.
         if (!fs.existsSync(`${dir}/probe.txt`)) hasAudio = true;
         if (!hasAudio) return '';
@@ -1374,7 +1452,7 @@ async function extractAudioTranscript(videoPath, dir) {
 
         await run(WHISPER_BIN, ['-m', WHISPER_MODEL, '-f', wav, '-otxt', '-nt', '-l', 'auto', '-of', `${dir}/out`], WHISPER_TIMEOUT_MS);
         let txt = '';
-        try { txt = fs.readFileSync(`${dir}/out.txt`, 'utf8'); } catch { txt = ''; }
+        try { txt = await fs.promises.readFile(`${dir}/out.txt`, 'utf8'); } catch { txt = ''; }
         txt = txt.replace(/\s+/g, ' ').trim();
         if (txt.length > MAX_TRANSCRIPT_CHARS) txt = txt.slice(0, MAX_TRANSCRIPT_CHARS) + ' ...[dipotong]';
         return txt;

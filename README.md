@@ -18,7 +18,7 @@ LLM-nya **freemodel.dev (GPT-5.5)** buat dua-duanya — vision (baca screenshot/
 
 `/cari <keyword>` atau nanya natural langsung, bot bakal trigger search sendiri kalau kebutuhan data terbaru. Urutan fallback: Serper → Tavily → DuckDuckGo. DDG nggak butuh API key jadi minimal selalu ada yang jalan.
 
-Buat baca isi halaman (`web_fetch`), bot coba lewat **Scrapling microservice** dulu — fetcher anti-bot (Playwright stealth) yang bisa nembus Cloudflare/halaman yang nolak request biasa. Kalau service-nya mati, otomatis fallback ke `axios`. Service-nya proses Python kepisah (`scrapling_service.py`), bind `127.0.0.1` doang, dan SSRF guard-nya tetep jalan di sisi bot SEBELUM URL dioper ke Scrapling.
+Buat baca isi halaman (`web_fetch`), bot coba lewat **Scrapling microservice** dulu — fetcher anti-bot (Playwright stealth) yang bisa nembus Cloudflare/halaman yang nolak request biasa. Kalau service-nya mati, otomatis fallback ke `axios`. Kalau direct fetch kena anti-bot/HTTP error/halaman kosong dan `FIRECRAWL_API_KEY` ada, bot fallback terakhir ke Firecrawl v2 scrape API. Service Scrapling proses Python kepisah (`scrapling_service.py`), bind `127.0.0.1` doang, dan SSRF guard-nya tetep jalan di sisi bot SEBELUM URL dioper ke Scrapling/Firecrawl.
 
 ### Vision
 
@@ -101,6 +101,9 @@ Semua cap di bawah ini env-tunable. Default-nya gw set buat HP 4-6GB RAM:
 | `WHISPER_BIN` | `/root/whisper.cpp/build/bin/whisper-cli` | path whisper.cpp | — |
 | `WHISPER_MODEL` | `.../ggml-base.bin` | model lebih kecil (tiny) | model lebih akurat (small) |
 | `SCRAPLING_FETCH_URL` | `http://127.0.0.1:8765/fetch` | kosongin = disable scrapling | — |
+| `FIRECRAWL_API_KEY` | kosong | disable fallback Firecrawl | isi kalau mau web_fetch fallback anti-bot eksternal |
+| `FIRECRAWL_TIMEOUT_MS` | 45000 | koneksi lambat bikin slot ketahan | situs berat |
+| `FIRECRAWL_MAX_AGE_MS` | 3600000 | butuh fresh scrape | hemat credit/cache |
 
 Detail di `.env.example`.
 
@@ -145,6 +148,7 @@ Opsional (kosongin aja kalau ga punya, fallback ke DDG):
 ```
 SERPER_API_KEY=
 TAVILY_API_KEY=
+FIRECRAWL_API_KEY=
 ```
 
 Admin, pisah koma:

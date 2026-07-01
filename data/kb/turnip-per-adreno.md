@@ -17,8 +17,7 @@ Turnip lebih aktif maintained buat use case Winlator/GameHub.
 
 ### Adreno 710 (SD 6 Gen 1/2/3)
 - `github.com/Vauzi-17/710`
-- **CATATAN**: Adreno 710 Vulkan cuma 1.2. Beberapa DXVK mainstream butuh 1.3.
-  Pakai **DXVK-Sarek** sebagai pair. Sumber: `github.com/pythonlover02/DXVK-Sarek`.
+- **CATATAN**: Adreno 710 HW = Vulkan **1.3** (Qualcomm spec), BUKAN 1.2. Tapi driver Turnip buat 710 masih experimental (build komunitas, extension gaps) → pair **DXVK-Sarek** (extension opsional, lebih toleran) sbg default aman. Build Turnip T27+ udah report Vulkan 1.4 + support 710/720. `[REVEALED — komunitas Apr 2026 · HW: Wikipedia/Qualcomm]`. Sumber Sarek: `github.com/pythonlover02/DXVK-Sarek`.
 
 ### Adreno 720/722 (SD 7 Gen 1/7s Gen 2)
 - `github.com/Vauzi-17/710` (multi-chipset support)
