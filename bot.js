@@ -178,9 +178,14 @@ function saveHistory() {
 }
 let saveInFlight = false;
 let saveInFlightPromise = null;   // ref ke promise berjalan; dipakai shutdown buat await beneran (bukan polling boolean).
+let pendingSave = false;
 async function saveHistoryAsync() {
-    if (saveInFlight) return saveInFlightPromise;
+    if (saveInFlight) {
+        pendingSave = true;
+        return saveInFlightPromise;
+    }
     saveInFlight = true;
+    pendingSave = false;
     const work = (async () => {
         try {
             const tmp = HISTORY_FILE + '.tmp';
@@ -191,6 +196,9 @@ async function saveHistoryAsync() {
         } finally {
             saveInFlight = false;
             saveInFlightPromise = null;
+            if (pendingSave) {
+                scheduleSave();
+            }
         }
     })();
     saveInFlightPromise = work;
@@ -227,11 +235,14 @@ process.on('SIGTERM', () => { shutdown('SIGTERM'); });
 // Global crash guard — jangan biarin bot mati gara2 1 promise reject yg lolos.
 process.on('unhandledRejection', (reason) => {
     console.error('⚠️  unhandledRejection:', reason && reason.stack ? reason.stack : reason);
+    try { saveHistory(); } catch (_) {}
+    process.exit(1);
 });
 process.on('uncaughtException', (err) => {
     console.error('⚠️  uncaughtException:', err && err.stack ? err.stack : err);
     // Coba simpan history dulu sebelum hard-crash (kalau memang fatal).
     try { saveHistory(); } catch (_) {}
+    process.exit(1);
 });
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -301,6 +312,7 @@ Keyword trigger (case-insensitive):
 - "BannerHub" / "BannerHub Lite" / "BannerHub v6" / "Bannerlator" / "BannersComponentInjector" / "BCI" / "AIO-Graphics-Test" / "GamePathFixer" / "dxvk-unified" / "Nightlies" / "bannerhub-nano-offline" / "Ludashi-plus" / "Lossless.dll" → kb_lookup("the412banner")
 - Preset Box64/FEX value: "preset Performance" / "preset Compatibility" / "preset Stability" / "preset Intermediate" / "isi preset" / "preset bawaan" / "preset default Box64" / "FEXCore preset" → kb_lookup("box64-fex-presets") — WAJIB konfirmasi app/fork dulu (GameHub vs Ludashi value BEDA, [VERIFIED]).
 - Var mekanisme/custom tuning: "SAFEFLAGS" / "STRONGMEM" / "BIGBLOCK" / "CALLRET" / "UNITYPLAYER" / "TSOENABLED" / "MULTIBLOCK" / "FASTNAN" / "FASTROUND" / "X87DOUBLE" / "WEAKBARRIER" / "NATIVEFLAGS" / "DYNAREC_SEP" / "DYNACACHE" / "X87_NO80BITS" / "custom preset" / "compose preset" / "var X ngaruh apa" → kb_lookup("box64-fex-variable-mechanics") — echo confidence tag [VERIFIED]/[THEORETICAL] sesuai file.
+- "drm" / "crack" / "bajakan" / "goldberg" / "steamless" / "denuvo" / "steam_api.dll" / "steam error" / "steam is not running" → kb_lookup("drm-bypass")
 
 Contoh konkret:
 - User: "Winlator Ludashi bagus?" → STEP 1: kb_lookup("ludashi"). STEP 2: BARU jawab pake fakta dari KB (3 build variant, inflection 3.0/2.9/2.8.2, dst).
@@ -1898,20 +1910,25 @@ bot.on('message', async (msg) => {
     let ytUrl = (promptText.match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i) || [])[0];
     if (ytUrl) ytUrl = ytUrl.replace(/[.,;:!?)\]}"']+$/, '');
     if (ytUrl) {
-        const yt = await withTyping(chatId, () => processYouTube(ytUrl));
-        if (yt) {
-            if (yt.images.length) {
-                images.push(...yt.images);
-                const seen = yt.mode === 'frames'
-                    ? 'Kamu dikasih beberapa FRAME dari video ini. Analisa dari frame + judul.'
-                    : 'Video aslinya TIDAK bisa diunduh (YouTube blokir IP server), jadi kamu HANYA dikasih THUMBNAIL + judul. Analisa seadanya, dan JUJUR bilang ini berdasar thumbnail+judul, bukan nonton videonya.';
-                promptText += `\n\n[KONTEN YOUTUBE]\n${yt.meta}\n[${seen}]`;
-            } else {
-                promptText += `\n\n[KONTEN YOUTUBE]\n${yt.meta}\n[Thumbnail & video ga keambil; cuma judul yang ada. Jujur ke user soal keterbatasan ini.]`;
+        try {
+            const yt = await withTyping(chatId, () => processYouTube(ytUrl));
+            if (yt) {
+                if (yt.images.length) {
+                    images.push(...yt.images);
+                    const seen = yt.mode === 'frames'
+                        ? 'Kamu dikasih beberapa FRAME dari video ini. Analisa dari frame + judul.'
+                        : 'Video aslinya TIDAK bisa diunduh (YouTube blokir IP server), jadi kamu HANYA dikasih THUMBNAIL + judul. Analisa seadanya, dan JUJUR bilang ini berdasar thumbnail+judul, bukan nonton videonya.';
+                    promptText += `\n\n[KONTEN YOUTUBE]\n${yt.meta}\n[${seen}]`;
+                } else {
+                    promptText += `\n\n[KONTEN YOUTUBE]\n${yt.meta}\n[Thumbnail & video ga keambil; cuma judul yang ada. Jujur ke user soal keterbatasan ini.]`;
+                }
+                if (yt.transcript) {
+                    promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${yt.transcript}\n[Hasil transcribe audio video YouTube. Gabung sama frame visual buat jawab.]`;
+                }
             }
-            if (yt.transcript) {
-                promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${yt.transcript}\n[Hasil transcribe audio video YouTube. Gabung sama frame visual buat jawab.]`;
-            }
+        } catch (ytErr) {
+            console.error('Gagal fetch YouTube:', ytErr.message);
+            promptText += '\n\n[KONTEN YOUTUBE]\n[Gagal ambil info YouTube. Beritahu user ada masalah jaringan/limitasi.]';
         }
     }
 
@@ -1920,15 +1937,20 @@ bot.on('message', async (msg) => {
         let vUrl = (promptText.match(/https:\/\/[^\s]+/i) || [])[0];
         if (vUrl) vUrl = vUrl.replace(/[.,;:!?)\]}"']+$/, '');
         if (vUrl && (await _isAllowedVideoUrl(vUrl))) {
-            const vid = await withTyping(chatId, () => processVideoUrl(vUrl));
-            if (vid && (vid.images.length || vid.transcript)) {
-                if (vid.images.length) {
-                    images.push(...vid.images);
-                    promptText += `\n\n[VIDEO LINK]\n[Kamu dikasih ${vid.images.length} FRAME dari video di link ini. Analisa visualnya.]`;
+            try {
+                const vid = await withTyping(chatId, () => processVideoUrl(vUrl));
+                if (vid && (vid.images.length || vid.transcript)) {
+                    if (vid.images.length) {
+                        images.push(...vid.images);
+                        promptText += `\n\n[VIDEO LINK]\n[Kamu dikasih ${vid.images.length} FRAME dari video di link ini. Analisa visualnya.]`;
+                    }
+                    if (vid.transcript) {
+                        promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${vid.transcript}\n[Hasil transcribe audio video dari link. Gabung sama frame visual buat jawab.]`;
+                    }
                 }
-                if (vid.transcript) {
-                    promptText += `\n\n[TRANSKRIP AUDIO VIDEO]\n${vid.transcript}\n[Hasil transcribe audio video dari link. Gabung sama frame visual buat jawab.]`;
-                }
+            } catch (err) {
+                console.error('Gagal fetch custom video URL:', err.message);
+                promptText += '\n\n[VIDEO LINK]\n[Gagal ngambil video dari link. Beritahu user videonya ga bisa diakses.]';
             }
         }
     }

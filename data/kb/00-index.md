@@ -10,6 +10,9 @@ File ini = peta. Tiap topik linked ke file detail di folder yg sama.
   "kenapa ganti DLL bisa kerja", "GPU spoofing nyentuh apa", "Rambooster placebo bukan", "bedanya
   Wine sama emulator apa", "anti-cheat kenapa ga bisa".
 
+## DRM Bypass & Cracking (BACA KALAU USER TANYA CARA MEMAINKAN GAME ORI/STEAM DI EMULATOR)
+- `drm-bypass.md` — Cara bypass Steam DRM, Goldberg emu, Epic Games, Denuvo, dan troubleshooting untuk menjalankan game ori di emulator mobile (Winlator). **PAKE FILE INI** kalau user nanya: "kenapa game steam nggak bisa dibuka", "cara pakai goldberg", "bypass drm", "crack game emulator".
+
 ## Forks & ecosystem map (BACA KALAU USER TANYA "fork mana / komponen apa")
 - `forks-landscape.md` — versi + status semua komponen 2026 (Winlator main/CMOD/Bionic Ludashi/GLIBC,
   Box64/FEX, DXVK/Sarek/VKD3D/d8vk/CNC DDraw/dxwrapper, libadrenotools/Turnip). Quick decision matrix

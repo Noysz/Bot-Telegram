@@ -4,6 +4,21 @@ Format: keep-a-changelog ringan. Tanggal absolut. Versi major = kapabilitas baru
 
 ---
 
+## [Unreleased] — 2026-07-07
+
+### KB diperluas — DRM Bypass & Steam Error Troubleshooting
+
+Menambahkan kemampuan bagi COPUX untuk memandu user yang mengalami masalah dengan game original/Steam di emulator Winlator akibat proteksi DRM.
+
+**Added:**
+- `data/kb/drm-bypass.md` — KB baru berisi cara bypass Steam DRM (Goldberg Steam Emu, Steamless), Epic Games, dan Denuvo. Juga mencakup troubleshooting lengkap untuk error spesifik Steam (`"Steam is not running"`, `"Failed to load steam_api.dll"`).
+
+**Changed:**
+- `bot.js` SYSTEM_PROMPT: Menambahkan keyword trigger baru di KB-FIRST rule (`drm`, `crack`, `bajakan`, `goldberg`, `steamless`, `denuvo`, `steam_api.dll`, `steam error`, `steam is not running`) yang akan mengarahkan pencarian langsung ke `kb_lookup("drm-bypass")`.
+- `data/kb/00-index.md` — Menambahkan section DRM Bypass & Cracking.
+
+---
+
 ## [Unreleased] — 2026-06-22
 
 ### Bot identity + scoped commands
