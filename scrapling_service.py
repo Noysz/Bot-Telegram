@@ -15,6 +15,7 @@ Run: /root/.venv/bin/python scrapling_service.py
 import asyncio
 import ipaddress
 import re
+import httpx
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -114,9 +115,81 @@ async def health(request):
     return JSONResponse({"ok": True})
 
 
+async def fetch_dlc_name_metadata(client: httpx.AsyncClient, dlc_id: int) -> tuple[str, str]:
+    dlc_str = str(dlc_id)
+    try:
+        res = await client.get(f"https://store.steampowered.com/api/appdetails?appids={dlc_str}")
+        if res.status_code == 200:
+            data = res.json()
+            if data and data.get(dlc_str, {}).get("success"):
+                raw_name = data[dlc_str]["data"].get("name", f"DLC_Unknown_Asset_{dlc_str}")
+                return (dlc_str, raw_name)
+    except Exception:
+        pass
+    return (dlc_str, f"DLC_Unknown_Asset_{dlc_str}")
+
+async def create_asset_mapping(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Integritas format payload JSON ditolak."})
+
+    appid = str(data.get("appid", "")).strip()
+    if not appid.isdigit():
+        return JSONResponse({"ok": False, "error": "Parameter 'appid' I/O tidak valid atau bukan merupakan angka metrik numerik utuh."})
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            res = await client.get(f"https://store.steampowered.com/api/appdetails?appids={appid}")
+            if res.status_code != 200:
+                return JSONResponse({"ok": False, "error": f"Kegagalan HTTP {res.status_code}: Repositori publik menolak koneksi transmisi."})
+            
+            api_data = res.json()
+            if not api_data or not api_data.get(appid, {}).get("success"):
+                return JSONResponse({"ok": False, "error": "Akses metadata diblokir, atau repositori data untuk ID tersebut tidak eksis."})
+
+            app_data = api_data[appid].get("data", {})
+            dlcs = app_data.get("dlc", [])
+            
+            if not dlcs:
+                return JSONResponse({"ok": False, "error": "Tidak terdeteksi adanya pemetaan struktur sub-elemen (DLC) untuk arsitektur aplikasi tersebut."})
+
+            dlcs_limited = dlcs[:15]
+            tasks = [fetch_dlc_name_metadata(client, d_id) for d_id in dlcs_limited]
+            results = await asyncio.gather(*tasks)
+
+            ini_lines = [
+                "[steam]",
+                f"appid = {appid}",
+                "unlockall = true",
+                "orgapi = steam_api_o.dll",
+                "orgapi64 = steam_api64_o.dll",
+                "extraprotection = false",
+                "forceappid = false",
+                "",
+                "[dlc]"
+            ]
+            
+            for d_id, d_name in results:
+                safe_dlc_name = d_name.replace('\n', ' ').replace('\r', '').strip()
+                ini_lines.append(f"{d_id} = {safe_dlc_name}")
+
+            if len(dlcs) > 15:
+                ini_lines.append(f"; ... [Dipotong: Sisa {len(dlcs)-15} entri lainnya digugurkan demi efisiensi I/O transmisi Telegram]")
+
+            return JSONResponse({
+                "ok": True,
+                "content": "\n".join(ini_lines)
+            })
+    except httpx.RequestError as exc:
+        return JSONResponse({"ok": False, "error": f"Latensi Sistem Jaringan: {str(exc)}"})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": f"Gangguan Eksekusi Node Internal: {str(exc)}"})
+
 app = Starlette(
     routes=[
         Route("/fetch", fetch, methods=["POST"]),
+        Route("/api/v1/asset-mapping", create_asset_mapping, methods=["POST"]),
         Route("/health", health, methods=["GET"]),
     ]
 )

@@ -1746,6 +1746,12 @@ bot.on('message', async (msg) => {
         }
         return;
     }
+    
+    if (cmd === '/dlc') {
+        const appId = text.replace(/^\/dlc(@\S+)?\s*/i, '').trim();
+        await handleDlcCommand(chatId, appId, bot);
+        return;
+    }
     if (cmd && cmd !== '/cari') return;
 
     // GATE GRUP: cuma berlaku buat pesan biasa (bukan command). /cari tetep jalan.
@@ -2013,6 +2019,70 @@ bot.on('message', async (msg) => {
 
 console.log('🚀 Bot COPUX-FourFect (gabungan V1+V2) startup…');
 
+function escapeSafeMd(text) {
+    if (!text) return '';
+    return text.toString().replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+}
+
+bot.on('document', async (msg) => {
+    const doc = msg.document;
+    if (!doc || !doc.file_name) return;
+    
+    const targetFiles = ['steam_emu.ini', 'Ali213.ini', 'HLM.ini', 'steam_appid.txt'];
+    if (!targetFiles.includes(doc.file_name)) return;
+    
+    const chatId = msg.chat.id;
+    try {
+        bot.sendChatAction(chatId, 'typing').catch(() => {});
+        const link = await bot.getFileLink(doc.file_id);
+        const res = await axios.get(link, { responseType: 'text', maxContentLength: 1048576 });
+        const content = res.data;
+        
+        const isGoldberg = doc.file_name === 'steam_appid.txt';
+        const hasAppId = /AppId\s*=\s*\d+/i.test(content) || (isGoldberg && /^\d+$/m.test(content));
+        const hasLanguage = /Language\s*=\s*\w+/i.test(content);
+        
+        let report = `✅ *Audit Verifikasi Integritas Lapisan Kompatibilitas untuk* \`${escapeSafeMd(doc.file_name)}\` *Selesai:*\n\n`;
+        report += `\\- Kunci Parameter AppId: ${hasAppId ? 'Terdeteksi \\(Valid\\)' : '*KORUP / HILANG*'}\n`;
+        
+        if (!isGoldberg) {
+            report += `\\- Kunci Parameter Language: ${hasLanguage ? 'Terdeteksi \\(Valid\\)' : '*HILANG \\(Beresiko tinggi memicu glitched text/font\\)*'}\n`;
+        } else {
+            report += `\\- Kunci Parameter Language: _\\(Bypass Otorisasi: Instrumen ini mengadopsi mekanisme ekstensi Goldberg txt\\)_\n`;
+        }
+        
+        return bot.sendMessage(chatId, report, { parse_mode: 'MarkdownV2', reply_to_message_id: msg.message_id });
+    } catch (e) {
+        return bot.sendMessage(chatId, `❌ *Kesalahan Node Internal Fatal:* ${escapeSafeMd(e.message)}`, { parse_mode: 'MarkdownV2' });
+    }
+});
+
+async function handleDlcCommand(chatId, appId, bot) {
+    try {
+        if (!appId || !/^\d+$/.test(appId)) {
+            return bot.sendMessage(chatId, "⚠️ *Format Input Galat*\\. Argumen ID Aset dipersyaratkan harus bernilai metrik numerik utuh\\.\nContoh: `/dlc 230410`", { parse_mode: 'MarkdownV2' });
+        }
+        
+        const response = await axios.post('http://127.0.0.1:8765/api/v1/asset-mapping', 
+            { appid: appId }, 
+            { timeout: 35000 }
+        );
+        
+        if (response.data.ok) {
+            const iniContent = response.data.content;
+            return bot.sendMessage(chatId, 
+                `Berikut adalah abstraksi matriks generator sub\\-aset \\(DLC\\) terkini untuk instrumen ID *${escapeSafeMd(appId)}*:\n\n\`\`\`ini\n${iniContent}\n\`\`\``, 
+                { parse_mode: 'MarkdownV2' }
+            );
+        } else {
+            return bot.sendMessage(chatId, `❌ *Resolusi Data Digagalkan Microservice:*\n${escapeSafeMd(response.data.error)}`, { parse_mode: 'MarkdownV2' });
+        }
+    } catch (error) {
+        return bot.sendMessage(chatId, `❌ *Anomali Latensi Jaringan:*\nKoneksi inter\\-process TCP menuju microservice lokal ditolak atau kehabisan waktu terputus\\.\n\\(${escapeSafeMd(error.message)}\\)`, { parse_mode: 'MarkdownV2' });
+    }
+}
+
 if (process.env.HARNESS_MODE) {
     module.exports = { chatHistory, runAgent, SYSTEM_PROMPT };
 }
+
