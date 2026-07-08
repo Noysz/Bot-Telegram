@@ -75,6 +75,13 @@ bot.on('polling_error', (e) => {
 // Provider routing: both vision & text-only → freemodel (TokenRouter/MiniMax-M3 stopped free tokens 2026-06-24).
 const VISION_MODEL = process.env.VISION_MODEL || 'gpt-5.5';
 const TEXT_MODEL = process.env.TEXT_MODEL || 'gpt-5.5';
+const DIRECT_FREEMODEL_URL = 'https://api.freemodel.dev/v1/chat/completions';
+const LLM_FALLBACK_URLS = (process.env.LLM_FALLBACK_URLS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+const LLM_FALLBACK_MODELS = (process.env.LLM_FALLBACK_MODELS || '')
+    .split(',').map((s) => s.trim());
+const LLM_FALLBACK_KEYS = (process.env.LLM_FALLBACK_KEYS || '')
+    .split(',').map((s) => s.trim());
 
 // Tunable lewat env biar adaptif: HP low-end Termux turunin, server lega naikin.
 const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || '10', 10);
@@ -955,16 +962,41 @@ async function runTool(name, args) {
 // =============================================================================
 
 async function chatCompletion(messages, useTools, hasImage) {
-    const cfg = hasImage
-        ? { url: COPUX_API_URL, key: COPUX_API_KEY, model: VISION_MODEL }
-        : { url: COPUX_API_URL, key: COPUX_API_KEY, model: TEXT_MODEL };
-    const body = { model: cfg.model, messages };
-    if (useTools) { body.tools = TOOLS; body.tool_choice = 'auto'; }
-    const res = await axios.post(cfg.url, body, {
-        headers: { 'Authorization': `Bearer ${cfg.key}`, 'Content-Type': 'application/json' },
-        timeout: 120000
-    });
-    return res.data;
+    const defaultModel = hasImage ? VISION_MODEL : TEXT_MODEL;
+    const providers = [
+        { name: 'primary', url: COPUX_API_URL, key: COPUX_API_KEY, model: defaultModel },
+        ...LLM_FALLBACK_URLS.map((url, i) => ({
+            name: `fallback-${i + 1}`,
+            url,
+            key: LLM_FALLBACK_KEYS[i] || COPUX_API_KEY,
+            model: LLM_FALLBACK_MODELS[i] || defaultModel
+        }))
+    ];
+    if (!providers.some((p) => p.url === DIRECT_FREEMODEL_URL)) {
+        providers.push({ name: 'freemodel-direct', url: DIRECT_FREEMODEL_URL, key: FREEMODEL_KEY, model: defaultModel });
+    }
+
+    let lastErr = null;
+    for (let i = 0; i < providers.length; i++) {
+        const cfg = providers[i];
+        const body = { model: cfg.model, messages };
+        if (useTools) { body.tools = TOOLS; body.tool_choice = 'auto'; }
+        try {
+            const res = await axios.post(cfg.url, body, {
+                headers: { 'Authorization': `Bearer ${cfg.key}`, 'Content-Type': 'application/json' },
+                timeout: 120000
+            });
+            if (i > 0) console.log(`LLM fallback active: ${cfg.name}`);
+            return res.data;
+        } catch (e) {
+            lastErr = e;
+            const status = e.response && e.response.status;
+            const safeMsg = status ? `HTTP ${status}` : (e.code || e.message);
+            console.error(`LLM provider ${cfg.name} gagal: ${safeMsg}`);
+            if (i === providers.length - 1) throw lastErr;
+        }
+    }
+    throw lastErr;
 }
 
 // MiniMax-M3 wraps reasoning in <think>...</think>. Strip before Telegram.
@@ -1841,4 +1873,3 @@ async function handleDlcCommand(chatId, appId, bot) {
 if (process.env.HARNESS_MODE) {
     module.exports = { chatHistory, runAgent, SYSTEM_PROMPT };
 }
-
