@@ -1,6 +1,6 @@
 # StevenMXZ Ecosystem — Winlator-Ludashi, Contents CDN, Adreno A8XX stack
 
-Source: github.com/StevenMXZ. Update: Juni 2026.
+Source: github.com/StevenMXZ. Update: Juli 2026.
 
 **SCOPE: Android emulator (Winlator family) — bot WAJIB tau ekosistem ini karena banyak user mobile pake distribusinya.**
 
@@ -12,7 +12,7 @@ Tujuan file ini: bot ngerti **3 build variant Ludashi**, **CDN Winlator-Contents
 
 | Repo | Stars | Status | Apa itu |
 |------|-------|--------|---------|
-| Winlator-Ludashi | 872 | Active (3.0 Apr 2026) | Fork Winlator paling rame, 3 build variant |
+| Winlator-Ludashi | 872 | Active (3.1.h Jun 2026) | Fork Winlator paling rame, 3 build variant |
 | Adreno-Tools-Drivers | 657 | Active (Jun 2026) | `turnip_builder.sh` script build Turnip dari Mesa |
 | Winlator-Contents | 63 | Active (Jun 2026) | CDN .wcp components catalog buat Driver Download Manager |
 | Adrenotools-Drivers | 11 | Active (Jan 2026) | Prebuilt Turnip binary releases (a8xx ONLY) |
@@ -39,12 +39,28 @@ User download `.apk` dari Releases, ada 3 variant. **NAMA SAMA, FUNGSI BEDA**:
 
 ---
 
+## Ludashi 3.1.h (Jun 2026) — current hotfix
+
+Sumber [VERIFIED via GitHub release]: `StevenMXZ/Winlator-Ludashi` release `v3.1.h` (22 Jun 2026).
+
+Highlight yang relevan buat bot:
+- VulkanRenderer banyak perubahan: compatibility/performance naik.
+- Wrong colors di Mali devices fixed (credit Pipetto-crypto).
+- ImageFS install speed naik sekitar 2x.
+- Touch controller baru + color support, random disappearing bug fixed.
+- FEXCore version dari shortcut yang ke-ignore sudah fixed.
+- Default Turnip baru support Adreno A8xx.
+- Update ini butuh reinstall, bukan sekadar update-over biasa.
+
+**Bot rule:** user Ludashi 3.0/3.1 awal + Mali wrong colors → arahkan ke 3.1.h. User mau upgrade ke 3.1.h → ingatkan reinstall.
+
 ## Ludashi 3.0 (Apr 2026) — MAJOR rewrite Vulkan
 
 Inflection point yang bot harus tau:
 
 | Versi | Inflection | Impact |
 |-------|-----------|--------|
+| **3.1.h** (Jun 2026) | VulkanRenderer compatibility/perf + Mali wrong-color fix + shortcut FEXCore bug fix + default Turnip A8xx | Current hotfix. Butuh reinstall. |
 | **3.0** (Apr 2026) | Vulkan backend rewrite (replace OpenGL) + VkImage HW buffer (no CPU copy) + FIFO/Mailbox present modes + XInput2 mouse | Default ke depan. Game OpenGL native (cnc-ddraw OpenGL path, beberapa pre-DX game) mungkin butuh fallback |
 | **2.9** (Mar 2026) | DXVK-Sarek BUNDLED + Proton content profile + Universal FPS limiter + Direct Rendering Mode (dri3 AHB scanout, experimental) + Compute BCn DISABLED on Adreno (default ON kemarin) | Sarek Mali user ga perlu manual install lagi. Compute BCn off di Adreno karena over-eager dulu |
 | **2.8.2** (Jan 2026) | Box64 32-bit games regression FIXED + GraphicsDriverConfigDialog (GPU name/device/vendor ID spoof) + Compute BCn decompression option for Mali | Spoofing GPU sekarang punya GUI |
@@ -65,7 +81,7 @@ Pattern: Driver Download Manager (Ludashi 2.8+) baca `contents.json` di repo ini
 
 **Sibling CDN** (cross-ref): The412Banner punya `winlator-contents` repo dengan struktur sama (`contents.json` raw GitHub), 138 entry (DXVK ×41, Box64 ×24, dst). URL: `https://raw.githubusercontent.com/The412Banner/winlator-contents/main/contents.json`. Bisa dipake user yang mau cross-pull dari ekosistem The412Banner. Detail: kb_lookup("the412banner").
 
-**Yang available (per Juni 2026):**
+**Yang available (per Juni/Juli 2026, tergantung catalog):**
 
 | Type | Count | Versi range | Highlight buat mobile |
 |------|-------|-------------|-----------------------|
@@ -73,7 +89,7 @@ Pattern: Driver Download Manager (Ludashi 2.8+) baca `contents.json` di repo ini
 | Box64 | 7 | 0.3.5 → 0.4.2 | 0.4.2-fix = stable terbaru |
 | **WOWBox64** | 4 | 0.3.7 → 0.4.2 | **WoW64-aware Box64** buat Wine 11 ARM64EC mode |
 | DXVK | 14 | 1.5.5 → 2.7.1 | Lihat matrix di bawah |
-| FEXCore | 13 | 2505 → 2605 | 2605 = latest, anti-OOM (RPMalloc) fixed |
+| FEXCore | 13 | 2505 → 2605 di catalog; upstream latest FEX-2607 | 2605 masih umum di emulator; 2607 upstream punya ARM64EC Proton fixes |
 | VKD3D | 7 | proton-2.7 → 3.0b | 3.0a/3.0b ARM64EC variant tersedia |
 
 ### DXVK matrix mobile (dari contents.json)
@@ -136,6 +152,7 @@ User SD 8 Elite ada masalah unique: Adreno A8XX driver Qualcomm proprietary belu
 3. User RedMagic (8 Pro / 9 Pro / 10 Pro) → saranin `Redmagic-build.apk` variant (unlock frame gen + gaming features).
 4. User Google Play Protect ke-flag install fake-package → suggest disable PPP temporary, atau pake vanilla build.
 5. User Ludashi 3.0+ + game OpenGL native (legacy 2000-an OpenGL game, beberapa cnc-ddraw OpenGL path) crash → downgrade ke 2.9.x atau enable compat mode (kalau ada).
+5b. User Ludashi 3.0/3.1 + Mali wrong colors → update ke 3.1.h hotfix.
 6. User minta cara install custom driver → arahin Driver Download Manager (Ludashi 2.8+) + custom repo URL `https://raw.githubusercontent.com/StevenMXZ/Winlator-Contents/main/contents.json`.
 7. User SD 8 Elite (Adreno A8xx) → Turnip default = StevenMXZ/Adrenotools-Drivers v849, BUKAN universal Turnip build.
 8. User SD non-A8xx coba install Adrenotools-Drivers a8xx → STOP, JELASIN "a8xx ONLY" = break device.

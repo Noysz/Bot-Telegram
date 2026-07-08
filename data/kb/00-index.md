@@ -20,7 +20,7 @@ File ini = peta. Tiap topik linked ke file detail di folder yg sama.
   "wrapper mana buat game lama", "perlu d8vk standalone ga", "Mali pake DXVK versi berapa".
 
 ## Evolution per tool (BACA KALAU USER LAMA PAKE VERSI USANG / NANYA "perlu upgrade ga")
-- `evolution-2026.md` — timeline inflection point DXVK (1.x → 2.7), Box64 (0.1 → 0.4.2), FEX (2107 → 2605).
+- `evolution-2026.md` — timeline inflection point DXVK (1.x → 3.0.1; practical mobile 2.7.1), Box64 (0.1 → 0.4.2), FEX (2107 → 2607).
   Mobile decision matrix per versi. 7 bot-rules untuk anti-stale-advice (NATIVEFLAGS udah default,
   state-cache hilang di 2.7, d8vk merged, dst). **PAKE FILE INI** kalau user nanya: "kenapa lambat di
   HP gw", "upgrade Box64/FEX worth ga", "DynaCache itu apa", "x87 speedup", "io_uring error",
@@ -87,7 +87,8 @@ File ini = peta. Tiap topik linked ke file detail di folder yg sama.
 
 ## GPU / Driver
 - `gpu-rules.md` — Mali vs Adreno hard rule, GPU spoofing, BCn/ClipDistance limitation.
-- `chipset-gpu-map.md` — mapping chipset HP (Snapdragon/Dimensity/Helio) → vendor GPU (Adreno/Mali/IMG) → stack rendering. **WAJIB cek file ini DULU** sebelum nentuin DXVK-Sarek vs Turnip — chipset Dimensity 7020/7025 itu jebakan (IMG, bukan Mali).
+- `chipset-gpu-map.md` — mapping chipset HP (Snapdragon/Dimensity/Helio) → vendor GPU (Adreno/Mali/IMG) → stack rendering. **WAJIB cek file ini DULU** sebelum nentuin Mali driver-gated stack vs Turnip — chipset Dimensity 7020/7025 itu jebakan (IMG, bukan Mali).
+- `mtk-mali-modern.md` — MediaTek/Mali 2026 driver gate: driver `v40+` buat DXVK 2.x D3D9/10/11 test path, driver `v50+` buat VKD3D/DX12-light experimental, contoh `54.1.0` + Vulkan `1.3.303` sebagai community signal. **PAKE FILE INI** kalau user nanya: "DXVK 2 di Mali", "DX12 Mali", "VKD3D Mali", "driver v40/v50", "Vulkan 1.3.303", "Helio G99 driver baru", "MTK sekarang bisa DX12", "Mali driver".
 - `turnip-per-adreno.md` — repo Turnip driver per chipset Adreno.
 
 ## Per-game tweak

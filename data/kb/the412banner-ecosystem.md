@@ -130,8 +130,8 @@ Repo: `The412Banner/Nightlies` (92⭐). Auto-build via GitHub Actions:
 - **Daily full build** 03:30 EST / 08:30 UTC
 - Format: `.wcp` (Winlator) + `.zip` (GameHub) untuk tiap komponen
 
-Component upstream pinning (current):
-- FEXCore: FEX-Emu/FEX (commit pinned per release, ~FEX-2605)
+Component upstream pinning (current per Nightlies snapshot; bisa lag dari upstream):
+- FEXCore: FEX-Emu/FEX (commit pinned per release, ~FEX-2605 di snapshot ini; upstream latest FEX-2607 per Jul 2026)
 - VKD3D-Proton: HansKristian-Work/vkd3d-proton 3.0.1 + ARM64EC variant
 - DXVK: doitsujin/dxvk (GPLAsync + ARM64EC + BinSem variants)
 - Box64: ptitSeb/box64 + Pipetto-crypto/box64 main

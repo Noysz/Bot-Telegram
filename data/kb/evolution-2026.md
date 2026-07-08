@@ -2,13 +2,13 @@
 
 Per-tool timeline yang **NGUBAH cara pakai di mobile**. Bukan changelog lengkap — cuma yang impact diagnosis/recommendation.
 
-Sumber: github.com/{doitsujin/dxvk, ptitSeb/box64, FEX-Emu/FEX}/releases.
+Sumber: github.com/{doitsujin/dxvk, ptitSeb/box64, FEX-Emu/FEX, HansKristian-Work/vkd3d-proton}/releases.
 
 ---
 
 ## DXVK — timeline + mobile takeaway
 
-Sumber [VERIFIED via GitHub releases/tags, Jun 2026]:
+Sumber [VERIFIED via GitHub releases/tags, Jul 2026]:
 - Official: `github.com/doitsujin/dxvk/releases`
 - Fork Mali: `github.com/pythonlover02/DXVK-Sarek`
 - gplasync: `gitlab.com/Ph42oN/dxvk-gplasync`
@@ -61,10 +61,16 @@ Jangan campur. Beda repo, beda versi, beda target hardware:
 - `VK_KHR_maintenance5` wajib, descriptor buffer, **state cache legacy DIHAPUS**.
 - Mobile take: panduan "hapus dxvk.cache" → STALE buat 2.7+ (file-nya udah ga ada).
 
-### DXVK 3.0 (25 Jun 2026) — CURRENT LATEST
+### DXVK 3.0 (25 Jun 2026)
 - **Wajib Vulkan 1.4** (driver mobile makin ke-cut — basically SEMUA Mali + mayoritas Adreno GA SANGGUP).
 - Shader compiler rewrite (dxbc-spirv), `VK_EXT_descriptor_heap` default, D3D9 fixed-function ubershaders, frame-limiter bawaan DIHAPUS.
 - Mobile take: **3.0 IRRELEVANT buat 99% HP sekarang** (Vulkan 1.4 belum ada di driver mobile). Jangan rekomendasiin 3.0 ke user Mali/Adreno kecuali dia eksplisit Vulkan 1.4. The412Banner ship `dxvk-3.0.wcp` + `dxvk-gplasync-3.0-1.wcp` cuma buat device bleeding-edge.
+
+### DXVK 3.0.1 (5 Jul 2026) — official latest
+- Bugfix release setelah 3.0. Tetap jalur Vulkan 1.4, jadi **bukan default mobile**.
+- 3.0 shader compiler baru (`dxbc-spirv`) bikin SPIR-V lebih compact dan bisa hemat memory di beberapa game, tapi compile time/cache behavior berubah.
+- Shader IR cache pindah ke `AppData/Local` prefix; path bisa diubah via `DXVK_SHADER_CACHE_PATH`.
+- Mobile take: untuk mayoritas Android 2026, practical DXVK modern masih **2.5-2.7.1**. DXVK 3.0/3.0.1 cuma untuk device/driver yang benar-benar report Vulkan 1.4.
 
 ### Mobile decision matrix (DXVK) — **[THEORETICAL]**
 **⚠️ Interpolasi spec, BUKAN benchmark DB.** Per-game `[VERIFIED]` di `per-game.md`/`gpu-rules.md` SELALU MENANG.
@@ -74,11 +80,13 @@ Jangan campur. Beda repo, beda versi, beda target hardware:
 | Vulkan 1.0/1.1 (Mali pre-Valhall / Adreno < 6xx) | DXVK-Sarek (base 1.10.x) atau async lawas 1.10.3 |
 | Vulkan 1.1/1.2 (Mali Valhall awal: G57, G68) | **DXVK-Sarek 1.11.1-mali-fix / 1.12.0** |
 | Vulkan 1.2 tanpa GPL (Mali G610/G715 driver tua) | DXVK-Sarek 1.12.0 (BCn emu) |
+| MTK/Mali driver `v40-v49` + Vulkan 1.3 path | DXVK 2.5-2.7 test path untuk D3D9/10/11; Sarek fallback |
+| MTK/Mali driver `>= v50` + Vulkan 1.3 path | DXVK 2.x primary test + VKD3D-light experimental |
 | Vulkan 1.3 + GPL (Adreno 7xx, Mali G720+, Turnip baru) | DXVK 2.5–2.7 vanilla / gplasync 2.7.1-1 |
 | Adreno + adrenotools custom Turnip | DXVK 2.5+ / gplasync |
-| Vulkan 1.4 (sangat jarang di mobile) | DXVK 3.0 (kalau driver dukung) |
+| Vulkan 1.4 (sangat jarang di mobile) | DXVK 3.0.1 (kalau driver dukung) |
 
-**[REVEALED PREFERENCE]** StevenMXZ Winlator-Contents CDN ship `dxvk-11.1-sarek-async.wcp` sebagai default Mali — "11.1" = **Sarek 1.11.1** (fork zeyadadev mali-fix). Mali default tanpa data per-game = **DXVK-Sarek 1.11.1-mali-fix / 1.12.0**, BUKAN vanilla 2.x, BUKAN gplasync.
+**[REVEALED PREFERENCE]** StevenMXZ Winlator-Contents CDN ship `dxvk-11.1-sarek-async.wcp` sebagai default Mali — "11.1" = **Sarek 1.11.1** (fork zeyadadev mali-fix). Mali default tanpa data per-game/driver = **DXVK-Sarek 1.11.1-mali-fix / 1.12.0**. Kalau user punya MTK/Mali driver `v40+`, cek `mtk-mali-modern.md` sebelum lock jawaban ke Sarek.
 
 **Empirical override (ke-test Noysz) — [VERIFIED]:**
 - Helio G99 + GTA V DX10 1024x600 Medium = **DXVK 1.7.2** (`dxvk-1.7.2.wcp` di StevenMXZ) > Sarek 1.12 (BCn emu Sarek over-burden Mali-G57 weak CPU). Catatan: "1.7.2" yang Noysz pake itu build ringan; "async" itu label longgar — package StevenMXZ `dxvk-1.7.2.wcp` adalah vanilla 1.7.2.
@@ -177,11 +185,18 @@ Jangan campur. Beda repo, beda versi, beda target hardware:
 - **x87 transcendental inlining → 3.7x speedup**.
 - Mobile take: kombinasi 2603 + 2604 = best FEX buat HP RAM ketat.
 
-### FEX-2605 (May 2026) — current bundled di emulator modern
+### FEX-2605 (May 2026)
 - Snapdragon X2 Elite improvements + atomic split-lock emulation.
 - ARM64EC controller crash fixes.
 - CLZERO support.
 - Mobile take: **stable + future-proof buat HP SD8 Elite generation**.
+
+### FEX-2607 (4 Jul 2026) — current upstream
+- Optimisasi/fix untuk 256-bit SVE2 future hardware.
+- Banyak JIT fixes: PMOVMSKB corruption, LOCK-prefixed instruction handling, vsyscall page tracking, CRC32 high 8-bit register, dan 32-bit VA JIT allocation.
+- Fix penting ARM64EC Proton: Mafia 3, Bioshock, dan 32-bit games yang disable DEP.
+- x87 FYL2X/FPREM/FPREM1 optimized.
+- Mobile take: kalau GameHub/GameNative/WinNative expose FEX 2607, itu upgrade bagus untuk ARM64EC Proton dan game 32-bit rewel. Kalau fork masih bundle 2605, itu belum otomatis salah, tapi bukan upstream latest.
 
 ### Mobile decision matrix (FEX)
 | Symptom | Cek FEX versi → solusi |
@@ -192,6 +207,7 @@ Jangan campur. Beda repo, beda versi, beda target hardware:
 | OOM di HP 4-6GB RAM | <2603 → upgrade (RPMalloc) |
 | Trig-heavy game (rotasi kamera ngaco) | <2604 → upgrade (3.7x sin/cos) |
 | HP SD8 Elite / X2 Elite controller crash | <2605 → upgrade |
+| ARM64EC Proton: Mafia 3/Bioshock/32-bit DEP crash | <2607 → upgrade kalau tersedia |
 
 ---
 
@@ -224,6 +240,7 @@ Jangan campur. Beda repo, beda versi, beda target hardware:
 3. **OOM di HP RAM ketat + user pake GameHub**: pertanyakan versi FEX. <2603 → upgrade lebih ampuh dari tweak.
 4. **Launch game Winlator lama (>30 detik tiap kali)**: cek Box64 versi. <0.3.8 → DynaCache bakal solve lebih baik dari tweak BIGBLOCK.
 5. **Mali user "DXVK 2.x crash"**: konfirmasi ulang Vulkan version + GPL support. Kalau ga ada GPL → arahin ke Sarek, jangan paksain 2.x.
+5b. **MTK/Mali user "driver v40/v50"**: cek `mtk-mali-modern.md`. `v40+` = DXVK 2.x test path, `v50+` = VKD3D/DX12-light experimental.
 6. **d8vk standalone** ditanya: tegasin — udah ke-merge ke DXVK 2.4. Pake DXVK aja.
 7. **Sebelum bilang "upgrade Box64 + DXVK + FEX"**: tanya emulator dulu. Winlator family beda paradigm dari GameHub family.
 8. **User Ludashi-plus v3.1.2-pre2+ LSFG frame-gen ga jalan**: ingatin — Lossless.dll BUKAN bundled lagi di pre2 (compliance). User wajib **Settings → Import Lossless.dll** manual. v3.1.1 dan lebih lama masih bundled. Detail: kb_lookup("the412banner").

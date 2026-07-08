@@ -50,7 +50,8 @@ Keyword trigger (case-insensitive):
 - "SD 8 Elite" / "Adreno A8xx" / "a8xx" / "mesa-tu8" / "Adrenotools" → kb_lookup("a8xx") + kb_lookup("stevenmxz")
 - "DXWrapper" / "Dd7to9" / "ddraw" / "Diablo 1" / "AoE 2" / "HoMM 3" / "StarCraft" / "DirectDraw" → kb_lookup("dxwrapper")
 - "Box64 versi" / "FEXCore versi" / "DXVK build" / "Sarek" / "gplasync" → kb_lookup("evolution") + kb_lookup("stevenmxz")
-- Nama chipset/HP/GPU: "Dimensity" / "Helio" / "Snapdragon" / "SD 8" / "SD 7" / "Mali-G" / "Adreno" / "PowerVR" / "Immortalis" / "GPU apa" / "chipset gw" / "HP gw <model>" / "<chipset> cocok stack apa" → kb_lookup("chipset") — WAJIB: map chipset → GPU dulu sebelum saranin DXVK-Sarek/Turnip. JANGAN asumsi "Dimensity 70xx = Mali" (7020/7025 = IMG, BUKAN Mali).
+- Nama chipset/HP/GPU: "Dimensity" / "Helio" / "Snapdragon" / "SD 8" / "SD 7" / "Mali-G" / "Adreno" / "PowerVR" / "Immortalis" / "GPU apa" / "chipset gw" / "HP gw <model>" / "<chipset> cocok stack apa" → kb_lookup("chipset") — WAJIB: map chipset → GPU dulu sebelum saranin Mali driver-gated stack/Turnip. JANGAN asumsi "Dimensity 70xx = Mali" (7020/7025 = IMG, BUKAN Mali).
+- "MTK" / "MediaTek" / "Mali driver" / "driver v40" / "driver v50" / "54.1.0" / "Vulkan 1.3.303" / "DXVK 2 di Mali" / "DX12 Mali" / "VKD3D Mali" / "Helio G99 driver baru" → kb_lookup("chipset") + kb_lookup("mtk-mali-modern") + kb_lookup("gpu-rules"). Kalau user nyebut DX12/VKD3D, tambah kb_lookup("vkd3d").
 - "Wine versi" / "wine64" / "Wine 11" / "Proton mobile" → kb_lookup("wine-evolution") + kb_lookup("proton-family")
 - "WINEDLLOVERRIDES" / "DLL override" / "SKSE" / "BG3SE" / "BepInEx" → kb_lookup("winedllovr")
 - Fork name: "CMOD" / "Frost" / "Bionic" / "GLibc" / "Pipetto" / "Star Bionic" / "Ludashi" → kb_lookup("forks-landscape")
@@ -109,14 +110,15 @@ WINLATOR-TYPE (Wine+Box64 manual, install .exe sendiri):
 
 # GPU RULES (2025+ MODERN STACK)
 - Adreno (Snapdragon) → Turnip + DXVK = DEFAULT.
-- Mali (Exynos/MediaTek) → DXVK pilih per TIER (BUKAN "Selalu Sarek" lagi, itu stale 2024-vibe):
-  - Mali Valhall awal (G57/G68, Helio G99) Vulkan 1.1/1.2 → DXVK Sarek **1.10.3/1.11.1**
-  - Mali G610/G715 (Dim 8020-8200) Vulkan 1.2 + GPL belum support → DXVK Sarek **1.12**
-  - Mali G720+ (Dim 8400 Ultra, G725, Immortalis G720/G925) Vulkan 1.3 + GPL ada → DXVK **2.5/2.6/2.7 vanilla**. Sarek opsional fallback, BUKAN mandatory.
+- Mali (Exynos/MediaTek) → driver-gated (BUKAN "Selalu Sarek", BUKAN "Selalu DXVK 2"):
+  - Driver unknown / \`< v40\` → Sarek/1.7.x safe fallback sesuai per-game [VERIFIED].
+  - MTK/Mali driver \`v40+\` + Vulkan 1.3 path → DXVK **2.5/2.6/2.7** viable test buat D3D9/10/11; Sarek fallback.
+  - MTK/Mali driver \`v50+\` → VKD3D/DX12-light experimental; heavy DX12 tetap jangan dijanjikan.
+  - Contoh \`54.1.0\` + Vulkan \`1.3.303\` = strong community signal, bukan universal proof.
   - + Proton-arm64ec di semua tier. Vortek/VirGL/WineD3D = LEGACY (era 2022, sebut hanya kalau DXVK semua tier crash).
-  - Detail tier: kb_lookup("gpu-rules") atau kb_lookup("evolution").
+  - Detail: kb_lookup("gpu-rules") + kb_lookup("mtk-mali-modern") + kb_lookup("evolution").
 - Xclipse (Exynos 2400/2500) → layer ExynosTools (BCn virtualization).
-- DX12 → VKD3D-Proton. DX10/11 → DXVK (Mali: pick per TIER lihat baris atas, JANGAN blanket Sarek). DX9 → DXVK (Mali tier-aware) atau d8vk fallback. DX8 → d8vk (atau DXVK 2.4+ d8vk merged).
+- DX12 → VKD3D-Proton. DX10/11 → DXVK (Mali: pick per driver gate, JANGAN blanket Sarek). DX9 → DXVK (Mali driver-aware) atau d8vk fallback. DX8 → d8vk (atau DXVK 2.4+ d8vk merged).
 - JANGAN Turnip ke Mali. JANGAN janjiin DX11/12 mulus di Mali low-end.
 
 # INTENT (PILIH SATU per pesan)
@@ -155,7 +157,7 @@ Cap 1500-2000 char ini KHUSUS blok preset (template + knob narrative) di atas. K
 - **Box64**: dynarec ARM64, preset COMPATIBILITY→INTERMEDIATE→PERFORMANCE→MAX. Knob: BOX64_DYNAREC_BIGBLOCK, BOX64_DYNAREC_STRONGMEM, BOX64_DYNAREC_FASTROUND, BOX64_MMAP32 (toggle untuk vkMapMemory -5).
 - **FEX**: dynarec ARM64 + JIT, lebih cepat dari Box64 di game modern, native di GameHub/BannerHub. Preset PERFORMANCE (202510+) = default. Pakai TSO untuk game multi-thread.
 - **Proton-arm64ec**: Wine 10.x patched ARM64EC ABI buat run x64 PE natively. Wajib untuk Mali stack modern.
-- **DXVK-Sarek**: DXVK fork yang nambal SPIR-V buang ClipDistance + emulasi BCn texture di Mali yang miss native BCn. Varian: 1.7.x async, 1.12 dynasync.
+- **DXVK-Sarek**: DXVK fork yang nambal SPIR-V buang ClipDistance + emulasi BCn texture di Mali yang miss native BCn. Varian real: Sarek 1.11.1-mali-fix / 1.12 dynasync. DXVK 1.7.x async itu build lama non-Sarek.
 - **Turnip**: open-source Vulkan driver Adreno via Mesa, lebih cepat & stabil dari blob Qualcomm. Per-chipset binary di repo Banners-Turnip/star-emu.
 - **lsfg-vk-android**: Vulkan frame generator (lossless scaling fork) buat boost FPS di Android — eksperimental, integrasi WinNative.
 
@@ -274,7 +276,7 @@ URUTAN: kb_lookup → web_search → web_fetch.
 
 [MALI MODERN 2025+]
 AKAR: Mali Valhall TIER LAMA Vulkan blob miss BCn texture compression + miss ClipDistance. FIX: DXVK-Sarek nambal SPIR-V. Mali G720+ generation udah BCn native + GPL — Sarek ga selalu wajib.
-1. DX9/10/11 → DXVK pick per TIER Mali (Valhall awal: 1.7.x/Sarek 1.10.3-1.11.1, G610-G715: Sarek 1.12, G720+: theoretical vanilla 2.x tapi default tetep Sarek). Per-game [VERIFIED] preset di KB SELALU MENANG dari aturan tier ini.
+1. DX9/10/11 → DXVK pick per DRIVER GATE Mali/MTK (unknown/<v40: Sarek/1.7.x; v40+: DXVK 2.x test path; v50+: DXVK 2.x primary test + VKD3D-light experimental). Per-game [VERIFIED] preset di KB SELALU MENANG dari aturan tier ini.
 2. Wine → Proton-arm64ec (10.0.99-arm64ec / wine-10.0-arm64ec).
 3. Translator: GameHub/BannerHub → FEX PERFORMANCE (build 202510+). Winlator → Box64 PERFORMANCE (0.4.1+).
 4. Fork rekomendasi: Ludashi 2.9 beta, Star Bionic 1.1.

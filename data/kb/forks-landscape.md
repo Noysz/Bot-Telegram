@@ -1,6 +1,6 @@
 # Forks & Components Landscape — 2026
 
-Status, versi, dan posisi tiap komponen di stack Winlator-keluarga. Update terakhir: Juni 2026.
+Status, versi, dan posisi tiap komponen di stack Winlator/GameHub/WinNative-keluarga. Update terakhir: Juli 2026.
 
 Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporware/dormant**, dan **mana yang current** sebelum nge-saranin.
 
@@ -30,6 +30,7 @@ Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporw
 ### Winlator Bionic Ludashi — StevenMXZ
 
 - **Status:** community fork (low visibility public repo)
+- **Latest:** v3.1.h hotfix (22 Jun 2026)
 - **Posisi:** variant CMOD-style yang ditune buat Ludashi benchmark / use-case spesifik Asia gaming.
 - **Saranin kalau:** user explicit nyebutin Ludashi atau punya rekomendasi grup tertentu.
 - **Catatan jujur:** dokumentasi tipis, jangan halu — kalau user nanya detail, tanya balik / arahin ke sumber rilis langsung.
@@ -42,6 +43,36 @@ Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporw
 - **Posisi:** Wine jalan di atas glibc proot (bukan Bionic). Lebih kompat sama binary Linux yang assume glibc; tradeoff: ukuran lebih besar, boot lebih lambat.
 - **Saranin kalau:** user butuh kompatibilitas binary tertentu yang fail di Bionic + sadar fork ini ga di-update.
 - **Catatan:** banyak community fork lanjutan (coffincolors cmod_glibc, dll) yang tetep maintained — arahin ke sana, bukan ke repo asli.
+
+---
+
+## GameHub-native family (frontend store + FEX/Proton stack)
+
+### GameHub Lite — Producdevity
+
+- **Status:** active maintained
+- **Latest:** v5.1.8 (2 Jul 2026)
+- **Repo:** github.com/Producdevity/gamehub-lite
+- **Posisi:** base ringan GameHub Lite, dipakai juga sebagai referensi BannerHub Lite.
+- **Catatan security:** v5.1.8 redacts Steam/auth token fields di logs. Kalau user pernah post log lama yang berisi token, suruh hapus/redact.
+
+### GameNative — utkarshdalal
+
+- **Status:** active, fast-moving
+- **Latest:** v1.1.0 (1 Jul 2026)
+- **Repo:** github.com/utkarshdalal/GameNative
+- **Posisi:** launcher native besar dengan FEX/Proton stack, device compatibility data, store integration.
+- **Highlight 1.1.0:** device compatibility data lebih granular, Pulse audio lebih reliable/low-latency, SurfaceFlinger renderer option, searchable driver/DXVK lists, gmem auto untuk Adreno 710/720/732.
+- **Mali signal:** upstream/community mulai push VKD3D/DX12-light on Mali. Treat sebagai `[COMMUNITY SIGNAL]`, tetap cek driver MTK `v50+`.
+
+### WinNative — WinNative-Emu
+
+- **Status:** active, beta
+- **Latest:** v0.2.0-beta (7 Jun 2026)
+- **Repo:** github.com/WinNative-Emu/WinNative
+- **Posisi:** native launcher dengan store download/session support.
+- **Highlight 0.2.0-beta:** OpenGL renderer diganti Vulkan Compositor, frame pacing/1% lows/FPS membaik, Snapdragon Game Super Resolution masuk FX menu, FPS limiter 30 Hz sampai refresh-rate.
+- **Catatan:** custom Steam client default butuh internet dan Proton/Wine tertentu yang diberi tag di component downloader.
 
 ---
 
@@ -63,7 +94,7 @@ Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporw
 ### FEX-Emu — FEX-Emu team
 
 - **Status:** active, fast-moving
-- **Latest:** FEX-2605 (May 2026)
+- **Latest:** FEX-2607 (4 Jul 2026)
 - **Repo:** github.com/FEX-Emu/FEX
 - **Posisi:** alternatif Box64 dengan TSO emulation + dispatcher tier. Lebih akurat di game yang sensitif memory ordering (Unity, beberapa anti-tamper).
 - **Dipake utama oleh:** GameHub Lite, BannerHub, GameNative, WinNative.
@@ -98,7 +129,8 @@ Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporw
 ### DXVK — doitsujin
 
 - **Status:** active
-- **Latest stable:** v2.7.1
+- **Latest upstream:** v3.0.1 (5 Jul 2026)
+- **Practical mobile latest:** v2.7.1 kecuali device report Vulkan 1.4.
 - **Repo:** github.com/doitsujin/dxvk
 - **Cover:** D3D8/9/10/11 → Vulkan. (D3D8 ke-merge dari d8vk.)
 - **Detail tuning:** lihat `dxvk-conf.md`.
@@ -146,8 +178,8 @@ Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporw
 |---|---|
 | Adreno 7xx + game DX11 modern | Winlator main / CMOD + DXVK 2.x + Turnip community |
 | Adreno 6xx older + game DX11 | Winlator CMOD + DXVK stable + adrenotools + Turnip per-chip |
-| Mali + game DX11 black screen | DXVK Sarek **1.11.1-mali-fix** (fork zeyadadev, FIX black-screen Mali) atau 1.12.0 — bukan DXVK 2.x |
-| Mali + game DX12 | VKD3D + Sarek combo; jangan harap perfect — banyak gap feature |
+| Mali + game DX11 black screen | Driver unknown/old: DXVK Sarek **1.11.1-mali-fix** atau 1.12.0. Driver MTK `v40+`: DXVK 2.x test path + Sarek fallback |
+| Mali + game DX12 | Driver `< v50`: jangan. Driver `>= v50`: VKD3D-light experimental + DX11 fallback |
 | Game DDraw (90s–00s) | CNC DDraw, bukan DXVK |
 | Game DX8 | DXVK 2.x (d8vk merged); jangan cari d8vk standalone |
 | Game butuh tweak compat eksotis | dxwrapper |

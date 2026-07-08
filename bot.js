@@ -470,13 +470,13 @@ const TOOLS = [
         type: 'function',
         function: {
             name: 'kb_lookup',
-            description: 'Ambil entry dari knowledge base lokal Fourfect (data/kb/*.md) — env var Box64/FEX/Wine/VKD3D, dxvk.conf knob, preset per-game (GTA V, RE4, Sleeping Dogs DE, Splinter Cell, Payday 2, SH2/3), GPU rule Mali/Adreno, Turnip per-chipset. Data verified maintainer (Noysz/Fourfect) — PRIORITAS PERTAMA, dipake SEBELUM web_search buat topik knob/setting/preset emulator umum. JANGAN call buat: sapaan, opini subjektif, info time-sensitive (rilis driver bulan ini, harga, news) — itu pakai web_search. Kalau hasil kosong → fallback ke web_search.',
+            description: 'Ambil entry dari knowledge base lokal Fourfect (data/kb/*.md) — env var Box64/FEX/Wine/VKD3D, dxvk.conf knob, preset per-game (GTA V, RE4, Sleeping Dogs DE, Splinter Cell, Payday 2, SH2/3), GPU rule Mali/Adreno, MTK/Mali driver gate v40/v50, Turnip per-chipset. Data verified maintainer (Noysz/Fourfect) — PRIORITAS PERTAMA, dipake SEBELUM web_search buat topik knob/setting/preset emulator umum. JANGAN call buat: sapaan, opini subjektif, info time-sensitive (rilis driver bulan ini, harga, news) — itu pakai web_search. Kalau hasil kosong → fallback ke web_search.',
             parameters: {
                 type: 'object',
                 properties: {
                     topic: {
                         type: 'string',
-                        description: 'Kata kunci substring (case-insensitive). Bisa nama env var, knob, game, chipset, atau konsep. Contoh OK: "BOX64_DYNAREC_BIGBLOCK", "TSO Sleeping Dogs", "dxvk maxAvailableMemory", "Adreno 710 dxvk", "RE4 vkd3d", "FEX Diesel engine". Contoh BURUK: "settingan bagus", "tolong bantu", "halo".'
+                        description: 'Kata kunci substring (case-insensitive). Bisa nama env var, knob, game, chipset, atau konsep. Contoh OK: "BOX64_DYNAREC_BIGBLOCK", "TSO Sleeping Dogs", "dxvk maxAvailableMemory", "Adreno 710 dxvk", "MTK Mali driver v50", "Vulkan 1.3.303", "RE4 vkd3d", "FEX Diesel engine". Contoh BURUK: "settingan bagus", "tolong bantu", "halo".'
                     }
                 },
                 required: ['topic']
