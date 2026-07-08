@@ -1,6 +1,6 @@
 {
   "name": "copux-fourfect-bot",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "COPUX-FourFect — Telegram bot pakar emulator PC-di-Android (Winlator/GameHub/BannerHub).",
   "main": "bot.js",
   "scripts": {
