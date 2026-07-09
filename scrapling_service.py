@@ -179,65 +179,92 @@ USER_AGENTS = [
 ]
 
 TARGETS = [
-    {"name": "SteamRIP", "url": "https://steamrip.com/?s={query}"},
-    {"name": "SteamGG", "url": "https://steamgg.net/?s={query}"},
-    {"name": "GameBounty", "url": "https://gamebounty.net/?s={query}"},
-    {"name": "AnkerGames", "url": "https://ankergames.net/?s={query}"},
-    {"name": "UnionCrax", "url": "https://unioncrax.com/?s={query}"}
+    {"name": "SteamRIP", "url": "https://steamrip.com/?s={query}", "cf": True},
+    {"name": "SteamGG", "url": "https://steamgg.net/?s={query}", "cf": False},
+    {"name": "DODIRepacks", "url": "https://dodi-repacks.site/?s={query}", "cf": False},
+    {"name": "FitGirl", "url": "https://fitgirl-repacks.site/?s={query}", "cf": False},
+    {"name": "OvaGames", "url": "https://ovagames.com/?s={query}", "cf": False},
+    {"name": "ElAmigos", "url": "https://elamigos.site/?s={query}", "cf": False},
 ]
+
+def _parse_results(html: str, target: dict, query: str) -> list:
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, 'html.parser')
+
+    query_words = [w.lower() for w in query.split() if len(w) > 2]
+    if not query_words:
+        query_words = [query.lower()]
+
+    clean_results = []
+    for a in soup.find_all('a'):
+        href = a.get('href', '').strip()
+        if not href or href.startswith('#') or href.startswith('javascript'):
+            continue
+
+        title = (a.get('title') or a.text).strip()
+        title = re.sub(r'<[^>]+>', '', title).strip()
+        if not title or len(title) < 4:
+            continue
+
+        href_lower = href.lower()
+        if any(x in href_lower for x in ['login', 'register', 'password', 'setting', 'contact', 'about', 'faq', 'term', 'tag/', 'category/']):
+            continue
+
+        title_lower = title.lower()
+        
+        # Beautify generic titles first (so they can pass relevance check)
+        if title_lower == "download" or title_lower == "read more" or "random" in title_lower:
+            extracted = href.split('/')[-1].replace('_', ' ').replace('-v1', '').replace('.html', '').replace('-', ' ').strip()
+            # clean up url parameters if any
+            extracted = extracted.split('?')[0]
+            title = extracted if len(extracted) > 4 else f"{target['name']} Release"
+            title_lower = title.lower()
+
+        # Strict relevance check ONLY on title, to prevent metadata/date links from passing
+        is_relevant = any(w in title_lower for w in query_words)
+        if not is_relevant:
+            continue
+
+        base_url = target["url"].split('?')[0]
+        absolute_link = urllib.parse.urljoin(base_url, href)
+
+        if not any(x['link'] == absolute_link for x in clean_results):
+            clean_results.append({"title": title, "link": absolute_link})
+
+        if len(clean_results) >= 2:
+            break
+
+    return clean_results
 
 async def _fetch_target(client: httpx.AsyncClient, target: dict, query: str):
     url = target["url"].format(query=urllib.parse.quote(query))
     headers = {"User-Agent": random.choice(USER_AGENTS)}
-    
+
     try:
         res = await client.get(url, headers=headers, follow_redirects=True)
+
+        # Jika kena Cloudflare 403 dan target ditandai cf=True, fallback ke Playwright
+        if res.status_code == 403 and target.get("cf"):
+            try:
+                from scrapling.fetchers import StealthyFetcher
+                import anyio
+
+                def _stealth():
+                    return StealthyFetcher.fetch(url, headless=True, network_idle=True, timeout=20000)
+
+                async with _sem:
+                    page = await anyio.to_thread.run_sync(_stealth)
+                html = getattr(page, 'body', '') or ''
+                if html:
+                    return target["name"], _parse_results(html, target, query)
+            except Exception:
+                pass
+            return target["name"], []
+
         if res.status_code != 200:
             return target["name"], []
-            
-        html = res.text
-        
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Tokenisasi query untuk relevancy check
-        query_words = [w.lower() for w in query.split() if len(w) > 2]
-        if not query_words:
-            query_words = [query.lower()]
-            
-        clean_results = []
-        for a in soup.find_all('a'):
-            href = a.get('href', '').strip()
-            if not href or href.startswith('#') or href.startswith('javascript'):
-                continue
-                
-            title = (a.get('title') or a.text).strip()
-            title = re.sub(r'<[^>]+>', '', title).strip()
-            if not title:
-                continue
-                
-            # Filter generic links
-            href_lower = href.lower()
-            if any(x in href_lower for x in ['login', 'register', 'password', 'setting', 'contact', 'about', 'faq', 'term']):
-                continue
-                
-            # Relevancy check: Pastikan judul mengandung kata dari query
-            title_lower = title.lower()
-            is_relevant = any(w in title_lower for w in query_words)
-            if not is_relevant:
-                continue
-                
-            # Make absolute URL (mengatasi relative link SteamRIP)
-            base_url = target["url"].split('?')[0]
-            absolute_link = urllib.parse.urljoin(base_url, href)
-                
-            if not any(x['link'] == absolute_link for x in clean_results):
-                clean_results.append({"title": title, "link": absolute_link})
-                
-            if len(clean_results) >= 2:
-                break
-                
-        return target["name"], clean_results
+
+        return target["name"], _parse_results(res.text, target, query)
     except Exception as exc:
         return target["name"], []
 
