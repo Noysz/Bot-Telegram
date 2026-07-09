@@ -1391,17 +1391,20 @@ bot.on('message', async (msg) => {
         scheduleSave();
         const mention = BOT_USERNAME ? '@' + BOT_USERNAME : 'bot';
         sendSafe(chatId,
-            '🤖 *COPUX Helper aktif*\n\n' +
-            'Asisten teknis emulator PC-di-Android — Winlator (semua fork), GameHub, Mobox, Box64, FEXCore, DXVK, Turnip, Adreno tuning, preset per-game.\n\n' +
-            '📸 *Kirim screenshot* error/setting/log → gw bedah langsung dari gambarnya.\n' +
-            '🔎 *Pertanyaan teknis* → gw deep-search ke pcgamingwiki / protondb / github driver biar ada sumbernya.\n\n' +
+            '🤖 *COPUX v2.1 Aktif*\n\n' +
+            'Pakar emulator PC-di-Android (Winlator, GameHub, BannerHub) sekaligus game hunter tanpa sensor moralitas.\n\n' +
+            '🛠️ *Spesialisasi:*\n' +
+            '— *Emulator Tuning:* DXVK, VKD3D, Box64, FEXCore, Turnip, & Mali driver v40/v50.\n' +
+            '— *Crack & DRM:* Bypass Steam DRM, Goldberg emu, & Winlator DLL Overrides.\n' +
+            '— *Vision:* Kirim screenshot error/setting/log → gw bedah langsung.\n\n' +
             '*Command:*\n' +
-            '/cari `<kata kunci>` — paksa cari di web dulu\n' +
-            '/addfix — sumbang fix ke Community KB\n' +
-            '/reset — bersihin memori obrolan\n\n' +
+            '/hunting `<judul>` — Cari link bajakan (pre-installed/portable) via web-dorking.\n' +
+            '/cari `<kunci>` — Paksa deep-search info & troubleshoot di web.\n' +
+            '/addfix — Sumbang fix atau trick emulator ke Community KB.\n' +
+            '/reset — Bersihkan memori obrolan.\n\n' +
             `*Di grup:* mention ${mention} atau reply pesan gw.\n\n` +
             '———\n' +
-            '💡 _Bot ini jalan pakai kredit dari freemodel. Daftar lewat link gw (gratis, lu juga dapet kreditnya):_\n' +
+            '💡 _Bot ini jalan pakai kredit dari freemodel. Daftar lewat link gw (gratis):_\n' +
             'https://freemodel.dev/invite/FRE-681bce55'
         );
         return;
