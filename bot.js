@@ -754,13 +754,13 @@ function displayName(from) {
 }
 
 function fmtDuration(ms) {
-    const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}d`;
+    const s = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+    if (s < 60) return `${s}s`;
     const m = Math.floor(s / 60);
     if (m < 60) return `${m}m`;
     const h = Math.floor(m / 60);
     if (h < 24) return `${h}j ${m % 60}m`;
-    return `${Math.floor(h / 24)}h ${h % 24}j`;
+    return `${Math.floor(h / 24)}hari ${h % 24}j`;
 }
 
 function buildStatsReport() {
