@@ -17,6 +17,7 @@ const { execFile } = require('child_process');
 const http = require('http');
 const os = require('os');
 const crypto = require('crypto');
+const kbRag = require('./modules/kb-rag');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const FREEMODEL_KEY = process.env.FREEMODEL_KEY;
@@ -68,6 +69,7 @@ bot.getMe().then((me) => {
         { command: 'reloadenv', description: 'Reload .env tanpa SSH' },
         { command: 'backup', description: 'Jalankan backup COPUX sekarang' },
         { command: 'reloadkb', description: 'Muat ulang data Knowledge Base' },
+        { command: 'reindexkb', description: 'Rebuild index RAG Knowledge Base' },
         { command: 'promotefix', description: 'Review dan push antrean addfix' },
         { command: 'profile', description: 'Lihat/set profil user' }
     ];
@@ -230,6 +232,7 @@ const BOT_START_TS = Date.now();
 const LAST_ERRORS = [];
 const LLM_EVENTS = [];
 const PROFILE_FILE = path.join(DATA_DIR, 'user-profiles.json');
+const KB_RAG_INDEX_FILE = process.env.KB_RAG_INDEX_FILE || path.join(DATA_DIR, 'kb-rag-index.json');
 const BACKUP_SCRIPT = path.join(__dirname, 'scripts', 'backup.js');
 const AUTO_BACKUP_ENABLED = String(process.env.AUTO_BACKUP_ENABLED || '1') !== '0';
 const BACKUP_INTERVAL_MS = parseInt(process.env.BACKUP_INTERVAL_MS || String(24 * 60 * 60 * 1000), 10);
@@ -515,6 +518,7 @@ async function buildStatusReport({ testLlm = true } = {}) {
         queueReport(),
         '',
         `Backup terakhir: ${backupStatusLine()}`,
+        kbRagStatusLine(),
         `Error terakhir: ${lastErr ? `${fmtDuration(Date.now() - lastErr.ts)} lalu [${lastErr.source}] ${lastErr.msg.slice(0, 160)}` : 'kosong'}`
     ].join('\n');
 }
@@ -936,6 +940,27 @@ const TOOLS = [
     {
         type: 'function',
         function: {
+            name: 'kb_rag_search',
+            description: 'RAG search lokal berbasis chunk+vector sparse dari COPUX data/kb. Pakai ini untuk pertanyaan emulator panjang, lintas file, chipset/game/driver ambigu, atau saat kb_lookup/kb_search kurang presisi. Return top chunk dengan file, section, score, dan context siap pakai. Sumbernya COPUX KB lokal, bukan KB web FourFect.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'Query natural language spesifik. Contoh: "Mali driver v50 buat DX12 ringan", "Helio G99 game Unity crash Box64", "Adreno 730 Turnip paling stabil".'
+                    },
+                    top_k: {
+                        type: 'number',
+                        description: 'Jumlah chunk yang diminta. Default 8, maksimal 12.'
+                    }
+                },
+                required: ['query']
+            }
+        }
+    },
+    {
+        type: 'function',
+        function: {
             name: 'web_search',
             description: 'Cari sumber/link buat pertanyaan TEKNIS spesifik: param dxvk.conf, env var (BOX64_*/DXVK_*/MESA_*), error/crash game tertentu, kompatibilitas game, driver per-GPU (Turnip/Adreno/Mali), versi rilis emulator. JANGAN call buat: sapaan, opini/rekomendasi subjektif ("emulator terbaik"), pertanyaan umum yg bisa dijawab dari pengetahuan domain. Return: daftar judul+URL. Wajib dipanggil SEBELUM web_fetch kalau URL belum diketahui dari hasil search/system prompt.',
             parameters: {
@@ -1263,6 +1288,7 @@ async function webFetch(url) {
 
 const KB_DIR = path.join(DATA_DIR, 'kb');
 let KB_CACHE = null; // [{ file, sections: [{ header, body }] }]
+let KB_RAG_INDEX = null;
 
 function loadKB() {
     try {
@@ -1292,6 +1318,43 @@ function loadKB() {
         console.error('KB load error:', e.message);
         KB_CACHE = [];
     }
+}
+
+function ensureKbRagIndex({ force = false } = {}) {
+    const res = kbRag.ensureIndex(KB_DIR, KB_RAG_INDEX_FILE, { force });
+    KB_RAG_INDEX = res.index;
+    return res;
+}
+
+function loadKbRagIndex() {
+    if (!KB_RAG_INDEX) {
+        KB_RAG_INDEX = kbRag.loadIndex(KB_RAG_INDEX_FILE);
+    }
+    return KB_RAG_INDEX;
+}
+
+function kbRagStatusLine() {
+    const index = loadKbRagIndex();
+    return kbRag.statusLine(index);
+}
+
+function reindexKbNow() {
+    const t0 = Date.now();
+    KB_CACHE = null;
+    loadKB();
+    const { index, rebuilt } = ensureKbRagIndex({ force: true });
+    const fileCount = Array.isArray(KB_CACHE) ? KB_CACHE.length : 0;
+    const sectionCount = Array.isArray(KB_CACHE) ? KB_CACHE.reduce((s, f) => s + (f.sections?.length || 0), 0) : 0;
+    return {
+        ok: true,
+        rebuilt,
+        ms: Date.now() - t0,
+        fileCount,
+        sectionCount,
+        chunkCount: index.chunkCount,
+        builtAt: index.builtAt,
+        indexFile: KB_RAG_INDEX_FILE
+    };
 }
 
 // =============================================================================
@@ -1458,9 +1521,25 @@ function kbSemanticSearch(query) {
     return out;
 }
 
+function kbRagSearch(query, topK = 8) {
+    const q = String(query || '').trim();
+    if (!q) return 'kb_rag_search: query kosong.';
+    let res;
+    try {
+        res = ensureKbRagIndex({ force: false });
+    } catch (e) {
+        recordError('kb-rag-index', e);
+        return `kb_rag_search gagal build/load index: ${String(e.message || e).slice(0, 160)}`;
+    }
+    const limit = Math.min(12, Math.max(1, parseInt(topK || '8', 10)));
+    const hits = kbRag.searchIndex(res.index, q, { topK: limit });
+    return kbRag.formatResults(q, hits, res.index);
+}
+
 async function runTool(name, args) {
     if (name === 'kb_lookup') return kbLookup(String(args.topic || ''));
     if (name === 'kb_search') return kbSemanticSearch(String(args.query || ''));
+    if (name === 'kb_rag_search') return kbRagSearch(String(args.query || ''), args.top_k || args.topK || 8);
     if (name === 'web_search') return await webSearch(String(args.query || ''));
     if (name === 'web_fetch') return await webFetch(String(args.url || ''));
     return 'Tool ga dikenal: ' + name;
@@ -1530,7 +1609,7 @@ function stripThink(text) {
 // Cuma tool yg emang keregistrasi yg dieksekusi (whitelist) — sisanya diabaikan.
 function parseTextToolCalls(text) {
     if (!text || text.indexOf('<') === -1) return [];
-    const known = new Set(['kb_lookup', 'kb_search', 'web_search', 'web_fetch']);
+    const known = new Set(['kb_lookup', 'kb_search', 'kb_rag_search', 'web_search', 'web_fetch']);
     const calls = [];
     let mm;
 
@@ -1942,7 +2021,7 @@ async function handleAdminHttp(req, res) {
             const html = `<!doctype html><meta charset="utf-8"><title>COPUX Ops</title>
 <style>body{font-family:system-ui,Arial,sans-serif;background:#111;color:#eee;margin:24px}pre{background:#1b1b1b;padding:16px;border-radius:8px;white-space:pre-wrap}button{margin:4px;padding:8px 10px}</style>
 <h1>COPUX Ops Panel</h1>
-<button onclick="load('/api/status')">status</button><button onclick="load('/api/llmtest')">llmtest</button><button onclick="load('/api/logs')">logs</button><button onclick="post('/api/reloadkb')">reload KB</button><button onclick="post('/api/backup')">backup</button>
+<button onclick="load('/api/status')">status</button><button onclick="load('/api/llmtest')">llmtest</button><button onclick="load('/api/logs')">logs</button><button onclick="post('/api/reloadkb')">reload KB</button><button onclick="post('/api/reindexkb')">reindex RAG</button><button onclick="post('/api/backup')">backup</button>
 <pre id="out">ready</pre>
 <script>
 async function load(p){out.textContent=await (await fetch(p+location.search)).text()}
@@ -1970,8 +2049,13 @@ async function post(p){out.textContent=await (await fetch(p+location.search,{met
             return;
         }
         if (u.pathname === '/api/reloadkb' && req.method === 'POST') {
-            KB_CACHE = null; loadKB();
-            sendHttp(res, 200, 'KB reloaded');
+            const r = reindexKbNow();
+            sendHttp(res, 200, `KB reloaded + RAG indexed: ${r.fileCount} file, ${r.sectionCount} section, ${r.chunkCount} chunk (${r.ms}ms)`);
+            return;
+        }
+        if (u.pathname === '/api/reindexkb' && req.method === 'POST') {
+            const r = reindexKbNow();
+            sendHttp(res, 200, JSON.stringify(r, null, 2), 'application/json');
             return;
         }
         if (u.pathname === '/api/backup' && req.method === 'POST') {
@@ -2176,13 +2260,24 @@ bot.on('message', async (msg) => {
     }
     if (cmd === '/reloadkb') {
         if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
-        const t0 = Date.now();
-        KB_CACHE = null;
-        loadKB();
-        const ms = Date.now() - t0;
-        const fileCount = Array.isArray(KB_CACHE) ? KB_CACHE.length : 0;
-        const sectionCount = Array.isArray(KB_CACHE) ? KB_CACHE.reduce((s, f) => s + (f.sections?.length || 0), 0) : 0;
-        sendSafe(chatId, `♻️ KB reloaded: ${fileCount} file, ${sectionCount} section (${ms}ms).`);
+        try {
+            const r = reindexKbNow();
+            sendSafe(chatId, `♻️ KB reloaded + RAG indexed: ${r.fileCount} file, ${r.sectionCount} section, ${r.chunkCount} chunk (${r.ms}ms).`);
+        } catch (e) {
+            recordError('reloadkb', e);
+            sendSafe(chatId, `❌ Reload KB gagal: ${String(e.message || e).slice(0, 160)}`);
+        }
+        return;
+    }
+    if (cmd === '/reindexkb') {
+        if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
+        try {
+            const r = reindexKbNow();
+            sendSafe(chatId, `🧠 RAG reindexed: ${r.chunkCount} chunk dari ${r.sectionCount} section / ${r.fileCount} file (${r.ms}ms).\nIndex: \`${r.indexFile}\``);
+        } catch (e) {
+            recordError('reindexkb', e);
+            sendSafe(chatId, `❌ Reindex RAG gagal: ${String(e.message || e).slice(0, 160)}`);
+        }
         return;
     }
     if (cmd === '/promotefix') {
@@ -2209,9 +2304,8 @@ bot.on('message', async (msg) => {
             promoteAddfix(pending);
             // Archive jsonl biar ga double-promote di run berikutnya.
             fs.renameSync(ADDFIX_FILE, ADDFIX_FILE.replace(/\.jsonl$/, `.promoted.${Date.now()}.jsonl`));
-            KB_CACHE = null;
-            loadKB();
-            sendSafe(chatId, `✅ ${pending.length} fix di-promote ke *community.md* + KB reloaded. Sekarang kepake di kb_lookup.`);
+            const r = reindexKbNow();
+            sendSafe(chatId, `✅ ${pending.length} fix di-promote ke *community.md* + KB/RAG reloaded (${r.chunkCount} chunk). Sekarang kepake di kb_lookup dan kb_rag_search.`);
         } catch (e) {
             console.error('promotefix gagal:', e.message);
             sendSafe(chatId, '⚠️ Gagal promote, cek log server.');
