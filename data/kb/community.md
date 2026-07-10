@@ -1,20 +1,6 @@
 # Community Fixes
 _Kontribusi member via /addfix, di-promote admin. Confidence: [REVEALED PREFERENCE] — real-world report, bukan maintainer ground-truth._
 
-## [COMMUNITY] kontribusi Boychun Chun (2026-06-20)
-[REVEALED PREFERENCE] report real member via /addfix — bukan ground-truth maintainer, verifikasi sebelum jadiin patokan mutlak.
-Hp/chipset : Poco f5, Snapdragon 7+ gen2
-Emulator : gamehub terbaru 6.0.9
-Game/app : resident Evil 3 rimake 
-Problem : drop fps
-
-## [COMMUNITY] kontribusi Boychun Chun (2026-06-20)
-[REVEALED PREFERENCE] report real member via /addfix — bukan ground-truth maintainer, verifikasi sebelum jadiin patokan mutlak.
-Hp/chipset : Poco f5, Snapdragon 7+ gen2
-Emulator : gamehub terbaru 6.0.9
-Game/app : resident Evil 3 rimake 
-Problem : drop fps
-
 ## [COMMUNITY] kontribusi Jen@ 182 (2026-06-20)
 [REVEALED PREFERENCE] report real member via /addfix — bukan ground-truth maintainer, verifikasi sebelum jadiin patokan mutlak.
 Game PES 2017, Troubleshooting

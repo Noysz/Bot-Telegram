@@ -21,11 +21,10 @@ const kbRag = require('./modules/kb-rag');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const FREEMODEL_KEY = process.env.FREEMODEL_KEY;
-const TOKENROUTER_KEY = process.env.TOKENROUTER_KEY;
 const COPUX_API_URL = process.env.COPUX_API_URL || 'https://api.freemodel.dev/v1/chat/completions';
 const COPUX_API_KEY = process.env.COPUX_API_KEY || FREEMODEL_KEY;
-if (!TELEGRAM_TOKEN || !FREEMODEL_KEY || !TOKENROUTER_KEY) {
-    console.error('❌  TELEGRAM_TOKEN / FREEMODEL_KEY / TOKENROUTER_KEY belum di-set. Isi dulu file .env!');
+if (!TELEGRAM_TOKEN || !COPUX_API_KEY) {
+    console.error('❌  TELEGRAM_TOKEN / COPUX_API_KEY belum di-set. Isi dulu file .env!');
     process.exit(1);
 }
 
@@ -57,6 +56,7 @@ bot.getMe().then((me) => {
         { command: 'cari', description: 'Web-dorking pencarian mendalam' },
         { command: 'dlc', description: 'Generate Steam DLC mapping overrides' },
         { command: 'addfix', description: 'Ajukan saran update Knowledge Base' },
+        { command: 'opus', description: 'Tanya model frontier (reasoning berat)' },
         { command: 'reset', description: 'Hapus konteks ingatan percakapan' }
     ];
     const adminCommands = [
@@ -108,6 +108,20 @@ let LLM_FALLBACK_URLS = [];
 let LLM_FALLBACK_MODELS = [];
 let LLM_FALLBACK_KEYS = [];
 
+// Vision bypass: 9router strip image_url saat forward -> request bergambar tembak
+// LANGSUNG ke provider vision (ga lewat gateway). Diisi dari .env di reloadRuntimeEnv().
+let VISION_API_URL = '';
+let VISION_API_KEY = '';
+let VISION_API_MODEL = '';
+let VISION_FALLBACK_URLS = [];
+let VISION_FALLBACK_MODELS = [];
+let VISION_FALLBACK_KEYS = [];
+
+// /opus frontier on-demand (chaty claude-opus-4). Isolated, ga masuk fallback chain.
+let OPUS_API_URL = '';
+let OPUS_API_KEY = '';
+let OPUS_API_MODEL = '';
+
 function parseCsvEnv(v) {
     return String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
@@ -139,6 +153,15 @@ function reloadRuntimeEnv() {
     LLM_FALLBACK_URLS = parseCsvEnv(process.env.LLM_FALLBACK_URLS);
     LLM_FALLBACK_MODELS = parseCsvEnv(process.env.LLM_FALLBACK_MODELS);
     LLM_FALLBACK_KEYS = parseCsvEnv(process.env.LLM_FALLBACK_KEYS);
+    VISION_API_URL = process.env.VISION_API_URL || '';
+    VISION_API_KEY = process.env.VISION_API_KEY || '';
+    VISION_API_MODEL = process.env.VISION_API_MODEL || '';
+    VISION_FALLBACK_URLS = parseCsvEnv(process.env.VISION_FALLBACK_URLS);
+    VISION_FALLBACK_MODELS = parseCsvEnv(process.env.VISION_FALLBACK_MODELS);
+    VISION_FALLBACK_KEYS = parseCsvEnv(process.env.VISION_FALLBACK_KEYS);
+    OPUS_API_URL = process.env.OPUS_API_URL || '';
+    OPUS_API_KEY = process.env.OPUS_API_KEY || '';
+    OPUS_API_MODEL = process.env.OPUS_API_MODEL || '';
 }
 loadRuntimeState();
 reloadRuntimeEnv();
@@ -194,6 +217,17 @@ const RATE_WARN_COOLDOWN_MS = 5 * 60 * 1000;
 const rateLog = new Map();
 const rateLastAt = new Map();
 const rateWarnedAt = new Map();
+// /opus = model frontier mahal. Limiter khusus (di atas checkRate umum): N per jam per user.
+const OPUS_MAX_PER_HOUR = parseInt(process.env.OPUS_MAX_PER_HOUR || '8', 10);
+const OPUS_WINDOW_MS = 60 * 60 * 1000;
+const opusLog = new Map();
+function checkOpusBudget(userId) {
+    if (userId == null || ADMIN_IDS.has(String(userId))) return true;
+    const now = Date.now();
+    const arr = (opusLog.get(userId) || []).filter((t) => now - t < OPUS_WINDOW_MS);
+    if (arr.length >= OPUS_MAX_PER_HOUR) { opusLog.set(userId, arr); return false; }
+    arr.push(now); opusLog.set(userId, arr); return true;
+}
 
 const chatHistory = {};
 const lastActive = {};
@@ -270,7 +304,11 @@ function redactSecret(s) {
     return String(s || '')
         .replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot[REDACTED]')
         .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
-        .replace(/(token|key|secret|password)["'=:\s]+[A-Za-z0-9._:/+-]+/gi, '$1=[REDACTED]');
+        .replace(/(x-api-key|api[_-]?key|authorization)["'=:\s]+\S+/gi, '$1=[REDACTED]')
+        .replace(/(token|key|secret|password)["'=:\s]+[A-Za-z0-9._:/+-]+/gi, '$1=[REDACTED]')
+        // bare high-entropy token (>=32 char base64/hex-ish tanpa label) — nutup key di
+        // axios error config.headers/data yg ga kelabel. Threshold 32 hindari nuke hash pendek.
+        .replace(/\b[A-Za-z0-9_-]{32,}\b/g, '[REDACTED]');
 }
 
 function recordError(source, err) {
@@ -354,12 +392,19 @@ function updateUserProfile(userId, fields) {
 function observeProfileFromText(userId, text) {
     if (!userId || !text) return;
     const rec = {};
-    const chip = String(text).match(/\b(Snapdragon\s+[0-9A-Za-z+ ]+|SD\s*[0-9][0-9A-Za-z+ ]+|Dimensity\s+[0-9A-Za-z+ ]+|Helio\s+G?\d+[A-Za-z ]*)\b/i);
+    // Regex DIBOUND ketat: model-number + suffix terbatas (Gen/Elite/s), JANGAN char-class
+    // ber-spasi greedy (dulu nelen kalimat lanjutan: "Snapdragon 8 gen 5 aja 30" → ke-capture penuh).
+    const chip = String(text).match(/\b(Snapdragon\s+\d+\+?s?(?:\s+Elite)?(?:\s+Gen\s+\d+)?|SD\s*\d+\+?s?(?:\s+Gen\s+\d+)?|Dimensity\s+\d{3,4}\+?|Helio\s+[GPX]?\d{2,4}[A-Za-z]?)\b/i);
     const gpu = String(text).match(/\b(Adreno\s+\d+|Mali-[A-Z]\d+\s*MC\d+|Mali-[A-Z]\d+|Immortalis-[A-Z]\d+|PowerVR\s+\S+|IMG\s+\S+)\b/i);
     const emu = String(text).match(/\b(GameHub(?: Lite)?|GameNative|WinNative|Winlator(?:\s+(?:Ludashi|Frost|CMOD|Cmod|Bionic|REF4IK))?|BannerHub|Bannerlator)\b/i);
     if (chip) rec.chipset = chip[1].replace(/\s+/g, ' ').trim();
     if (gpu) rec.gpu = gpu[1].replace(/\s+/g, ' ').trim();
     if (emu) rec.emulator = emu[1].replace(/\s+/g, ' ').trim();
+    // ANTI-CLOBBER: auto-observe cuma ISI field yang MASIH KOSONG. JANGAN timpa yang udah ada —
+    // user sering nyebut chip lain buat BANDINGIN ("kalau gw pake SD8 gimana?"), itu bukan ganti HP.
+    // Ganti device beneran = lewat /profile set (eksplisit menang atas tebakan free-text).
+    const existing = userProfiles[String(userId)] || {};
+    for (const k of Object.keys(rec)) { if (existing[k]) delete rec[k]; }
     if (Object.keys(rec).length) updateUserProfile(userId, rec);
 }
 function profileContext(userId) {
@@ -376,18 +421,32 @@ function profileContext(userId) {
 
 function currentProviders(hasImage = false) {
     const defaultModel = hasImage ? VISION_MODEL : TEXT_MODEL;
-    const providers = [
-        { name: 'primary', url: ACTIVE_COPUX_API_URL, key: ACTIVE_COPUX_API_KEY, model: defaultModel },
-        ...LLM_FALLBACK_URLS.map((url, i) => ({
-            name: `fallback-${i + 1}`,
-            url,
-            key: LLM_FALLBACK_KEYS[i] || ACTIVE_COPUX_API_KEY || FREEMODEL_KEY,
-            model: LLM_FALLBACK_MODELS[i] || defaultModel
-        }))
-    ];
-    if (!providers.some((p) => p.url === DIRECT_FREEMODEL_URL)) {
-        providers.push({ name: 'freemodel-direct', url: DIRECT_FREEMODEL_URL, key: FREEMODEL_KEY, model: defaultModel });
+    const providers = [];
+    // Vision bypass: kalau ada gambar & provider vision dikonfig, dahulukan jalur LANGSUNG
+    // (gateway 9router buang image_url). Fallback vision opsional dari VISION_FALLBACK_*.
+    if (hasImage && VISION_API_URL && VISION_API_KEY && VISION_API_MODEL) {
+        providers.push({ name: 'vision-primary', url: VISION_API_URL, key: VISION_API_KEY, model: VISION_API_MODEL });
+        VISION_FALLBACK_URLS.forEach((url, i) => {
+            if (!url) return;
+            providers.push({
+                name: `vision-fallback-${i + 1}`,
+                url,
+                key: VISION_FALLBACK_KEYS[i] || VISION_API_KEY,
+                model: VISION_FALLBACK_MODELS[i] || VISION_API_MODEL
+            });
+        });
     }
+    providers.push({ name: 'primary', url: ACTIVE_COPUX_API_URL, key: ACTIVE_COPUX_API_KEY, model: defaultModel });
+    LLM_FALLBACK_URLS.forEach((url, i) => providers.push({
+        name: `fallback-${i + 1}`,
+        url,
+        key: LLM_FALLBACK_KEYS[i] || ACTIVE_COPUX_API_KEY || FREEMODEL_KEY,
+        model: LLM_FALLBACK_MODELS[i] || defaultModel
+    }));
+    // freemodel-direct auto-push DIHAPUS (2026-07-10, opsi A): FREEMODEL_KEY mati -> spam HTTP 401,
+    // dan jalur ini redundan karena 9router (copux-stack: grq->cbs->hc) sudah multi-provider fallback.
+    // Konstanta DIRECT_FREEMODEL_URL sengaja DIPERTAHANKAN: masih dipakai di reloadRuntimeEnv() (~:133)
+    // sebagai default terakhir ACTIVE_COPUX_API_URL.
     return providers;
 }
 
@@ -900,6 +959,8 @@ function saveAddfix(entry) {
 // =============================================================================
 
 const MAX_TOOL_ROUNDS = 4;
+// Query yang nyangkut istilah teknis → paksa KB lookup round-0 (anti-halu spec/versi).
+const KB_FORCE_RE = /dimensity|helio|snapdragon|exynos|tensor|mali|adreno|dxvk|sarek|vkd3d|box64|box86|fex|winlator|ludashi|gamehub|proton|wine|turnip|driver|preset|\bfps\b|vulkan|d3d\d|directx/i;
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
 const TOOLS = [
@@ -1413,6 +1474,27 @@ function promoteAddfix(entries) {
     fs.appendFileSync(COMMUNITY_KB, header + block);
 }
 
+// Ambil (dan hapus) satu entry addfix berdasarkan ts, buat tombol Reject/Promote per-item.
+// Baca SEMUA baris (bukan slice PROMOTE_MAX) biar rewrite ga ngedrop entry ke-501+.
+// Baris korup (JSON invalid) dipertahankan apa adanya — jangan hancurin data yg ga kebaca.
+// Return entry yg dihapus, atau null kalau ts ga ketemu (mis. udah diproses klik lain).
+function takeAddfixByTs(ts) {
+    if (!fs.existsSync(ADDFIX_FILE)) return null;
+    const lines = fs.readFileSync(ADDFIX_FILE, 'utf8').split('\n').filter(Boolean);
+    let removed = null;
+    const keep = [];
+    for (const l of lines) {
+        let obj = null;
+        try { obj = JSON.parse(l); } catch (e) { keep.push(l); continue; }
+        if (!removed && obj && Number(obj.ts) === ts) { removed = obj; continue; }
+        keep.push(l);
+    }
+    if (!removed) return null;
+    if (keep.length) fs.writeFileSync(ADDFIX_FILE, keep.join('\n') + '\n');
+    else { try { fs.unlinkSync(ADDFIX_FILE); } catch (e) {} }   // kosong → hapus file (samain semantik 'udah promote').
+    return removed;
+}
+
 // Confidence tag priority — lower number = higher priority = surfaced FIRST.
 // VERIFIED (community-tested) menang dari REVEALED PREFERENCE (community signal)
 // yang menang dari THEORETICAL (interpolasi spec, belum ke-bench).
@@ -1549,22 +1631,72 @@ async function runTool(name, args) {
 //  AGENTIC LOOP — chatCompletion + tool calls
 // =============================================================================
 
-async function chatCompletion(messages, useTools, hasImage) {
+const LLM_TEMPERATURE = parseFloat(process.env.LLM_TEMPERATURE || '0.3');
+const LLM_MAX_TOKENS = parseInt(process.env.LLM_MAX_TOKENS || '4096', 10);
+
+async function chatCompletion(messages, useTools, hasImage, forceKb) {
     const providers = currentProviders(hasImage);
 
     let lastErr = null;
     let firstFail = null;
     for (let i = 0; i < providers.length; i++) {
         const cfg = providers[i];
-        const body = { model: cfg.model, messages };
-        if (useTools) { body.tools = TOOLS; body.tool_choice = 'auto'; }
+        // Sampling params eksplisit: default provider bisa temp tinggi (output ngaco) /
+        // budget kecil (reasoning makan token → content kosong). Override via .env kalau
+        // ada provider rewel. CF-native (di bawah) pakai schema sendiri, param ini di-drop.
+        const body = { model: cfg.model, messages, temperature: LLM_TEMPERATURE, max_tokens: LLM_MAX_TOKENS };
+        if (useTools) { body.tools = TOOLS; body.tool_choice = forceKb ? 'required' : 'auto'; }
+        // CF Workers AI vision pakai format NATIVE (image uint8 array + prompt), bukan OpenAI messages.
+        // Deteksi via URL /ai/run/. Reshape body + normalize response di bawah.
+        const isCfNative = cfg.url.indexOf('/ai/run/') !== -1;
+        let postBody = body;
+        if (isCfNative) {
+            const um = [...messages].reverse().find((m) => m.role === 'user');
+            let vtext = 'Jelaskan isi gambar ini.', vb64 = '';
+            if (um && Array.isArray(um.content)) {
+                for (const c of um.content) {
+                    if (c.type === 'text' && c.text) vtext = c.text;
+                    if (c.type === 'image_url' && c.image_url && c.image_url.url) vb64 = c.image_url.url;
+                }
+            }
+            const b64 = vb64.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+            // Guard OOM: Array.from(Buffer) bikin array int per-byte. Cap biar 1 foto gede
+            // ga ledakin heap. MAX_PHOTO_BYTES(2MB) → base64 ~2.7MB; 4MB = backstop.
+            if (b64.length > 4 * 1024 * 1024) {
+                if (!firstFail) firstFail = { name: cfg.name, reason: 'img-too-large' };
+                recordLlmEvent({ ok: false, provider: cfg.name, model: cfg.model, ms: 0, message: `${cfg.name} skip: image too large` });
+                console.error(`LLM provider ${cfg.name} skip: cf-native image too large`);
+                if (i === providers.length - 1) break;
+                continue;
+            }
+            postBody = { prompt: vtext, image: Array.from(Buffer.from(b64, 'base64')) };
+        }
         const t0 = Date.now();
         try {
-            const res = await axios.post(cfg.url, body, {
+            const res = await axios.post(cfg.url, postBody, {
                 headers: { 'Authorization': `Bearer ${cfg.key}`, 'Content-Type': 'application/json' },
                 timeout: 120000
             });
             const ms = Date.now() - t0;
+            let outData = res.data;
+            if (isCfNative && outData && outData.result) {
+                // CF native balik {result:{response}} -> normalize ke OpenAI shape biar runAgent ga pecah
+                outData = { choices: [{ message: { role: 'assistant', content: outData.result.response || '' } }] };
+            }
+            // CONTENT-SANITY GATE: HTTP 200 != jawaban kepake. Provider bisa balik 200 tapi
+            // content KOSONG (reasoning makan token budget) atau ga ada message sama sekali.
+            // Perlakukan sbg gagal → fallback provider berikutnya kepanggil, BUKAN kirim garbage.
+            // Catatan: tool_calls turn memang content-kosong by-design → JANGAN di-reject.
+            const gm = outData && outData.choices && outData.choices[0] && outData.choices[0].message;
+            const hasToolCalls = !!(gm && gm.tool_calls && gm.tool_calls.length);
+            const contentStr = gm && typeof gm.content === 'string' ? gm.content.trim() : '';
+            const looksEmpty = !gm || (!hasToolCalls && contentStr.length === 0);
+            if (looksEmpty && i < providers.length - 1) {
+                if (!firstFail) firstFail = { name: cfg.name, reason: 'empty-200' };
+                recordLlmEvent({ ok: false, provider: cfg.name, model: cfg.model, ms, message: `${cfg.name} empty/garbled 200` });
+                console.error(`LLM provider ${cfg.name} balikin empty/garbled 200, fallback`);
+                continue;
+            }
             recordLlmEvent({ ok: true, provider: cfg.name, model: cfg.model, ms, message: `${cfg.name} ok ${ms}ms` });
             if (i > 0) {
                 const from = firstFail ? `${firstFail.name} ${firstFail.reason}` : 'primary failed';
@@ -1573,7 +1705,7 @@ async function chatCompletion(messages, useTools, hasImage) {
                 recordLlmEvent({ ok: true, from, to, message: `${from} -> ${to}` });
                 notifyAdmins(`🧠 *LLM fallback aktif*\n${from} → ${to}\nLatency: ${ms}ms`, `llm-fallback-${cfg.name}`, 60000);
             }
-            return res.data;
+            return outData;
         } catch (e) {
             lastErr = e;
             const status = e.response && e.response.status;
@@ -1592,6 +1724,23 @@ async function chatCompletion(messages, useTools, hasImage) {
 // freemodel/GPT-5.5 ga punya quirk ini, regex no-op kalau ga match.
 // Sekalian buang sisa sintaks tool-call (kalau ada model copux-stack yg
 // ngeluarin <function>/<tool_call> sebagai teks) biar GA PERNAH bocor ke user.
+async function askOpus(question) {
+    const res = await axios.post(OPUS_API_URL, {
+        model: OPUS_API_MODEL,
+        messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: question }
+        ],
+        temperature: LLM_TEMPERATURE,
+        max_tokens: LLM_MAX_TOKENS
+    }, {
+        headers: { 'Authorization': `Bearer ${OPUS_API_KEY}`, 'Content-Type': 'application/json' },
+        timeout: 120000
+    });
+    const m = res.data && res.data.choices && res.data.choices[0] && res.data.choices[0].message;
+    return stripThink((m && m.content) || '');
+}
+
 function stripThink(text) {
     return text
         .replace(/<think>[\s\S]*?<\/think>\s*/gi, '')
@@ -1658,6 +1807,7 @@ async function runAgent(key, images) {
     // context-bleeding: window 10-msg di-feed flat, topik lama (mis. MGS V) bisa
     // nyampur ke jawaban topik baru (L4D). A/B: bleed ringan 64%->9%, TAPI kasus
     // parah (jawab game salah) belum kerepro/teruji. Jangan declare "fixed".
+    let focusHint = '';
     {
         const lastUser = [...working].reverse().find((m) => m.role === 'user');
         let focusTxt = '';
@@ -1668,6 +1818,7 @@ async function runAgent(key, images) {
             focusTxt = focusTxt.replace(/^\[META[^\]]*\]\s*/, '').replace(/\s+/g, ' ').replace(/"/g, "'").trim().slice(0, 200);
         }
         if (focusTxt) {
+            focusHint = focusTxt;
             working.push({ role: 'system', content: `[FOKUS] Pertanyaan user SAAT INI: "${focusTxt}". Jawab HANYA untuk ini. Topik/game dari pesan sebelumnya cuma konteks histori — JANGAN dibawa ke jawaban kecuali user eksplisit menyambungkannya.` });
         }
     }
@@ -1682,7 +1833,11 @@ async function runAgent(key, images) {
         }
         const lastRound = round === MAX_TOOL_ROUNDS;
         if (lastRound) working.push({ role: 'system', content: 'Cukup pencariannya. Jawab SEKARANG pakai info yang sudah didapat, jangan panggil tool lagi. Sertakan URL sumber.' });
-        const data = await chatCompletion(working, !lastRound, hasImage);
+        // GROUNDING: round-0, kalau query nyangkut istilah teknis (chipset/emulator/versi),
+        // PAKSA model call KB dulu (tool_choice:required) sebelum boleh jawab. Nutup halu
+        // "jawab dari ingatan" (mis. ngarang GPU/versi DXVK). Round berikutnya balik auto.
+        const forceKb = round === 0 && !lastRound && KB_FORCE_RE.test(focusHint);
+        const data = await chatCompletion(working, !lastRound, hasImage, forceKb);
         const m = data && data.choices && data.choices[0] && data.choices[0].message;
         if (!m) return '(server ga balikin jawaban, coba lagi)';
         if (!lastRound && m.tool_calls && m.tool_calls.length) {
@@ -2286,14 +2441,25 @@ bot.on('message', async (msg) => {
         if (!pending.length) { sendSafe(chatId, '📭 Ga ada addfix pending.'); return; }
         const arg = text.replace(/^\/promotefix(@\S+)?\s*/i, '').trim().toLowerCase();
         if (arg !== 'all') {
-            let prev = `📋 *${pending.length} addfix pending* (review dulu):\n\n`;
-            pending.forEach((e, i) => {
-                const full = String(e.content || '').replace(/\s+/g, ' ');
-                const snip = full.slice(0, 80) + (full.length > 80 ? '…' : '');
-                prev += `${i + 1}. *${e.name || 'anon'}* — ${snip}\n`;
-            });
-            prev += `\nKetik */promotefix all* buat masukin SEMUA ke community KB + reload.`;
-            sendSafe(chatId, prev);
+            const MAX_REVIEW_CARDS = 15;   // cap kartu per panggil — cegah spam pesan / rate-limit Telegram.
+            const shown = pending.slice(0, MAX_REVIEW_CARDS);
+            await sendSafe(chatId, `📋 *${pending.length} addfix pending* — review satu-satu pake tombol di tiap kartu.\n\`/promotefix all\` = promote semua sekaligus.`);
+            for (const e of shown) {
+                const name = String(e.name || 'anon').replace(/\s+/g, ' ').slice(0, 40);
+                const date = new Date(e.ts || Date.now()).toISOString().slice(0, 16).replace('T', ' ');
+                let full = String(e.content || '');
+                if (full.length > 1500) full = full.slice(0, 1500) + '\n…(dipotong utk tampilan; teks penuh tetap ke-promote utuh)';
+                const card = `👤 *${name}*  ·  ${date} UTC\n\n${full}`;
+                await sendSafe(chatId, card, {
+                    reply_markup: { inline_keyboard: [[
+                        { text: '❌ Reject', callback_data: `pf:r:${e.ts}` },
+                        { text: '✓ Promote', callback_data: `pf:p:${e.ts}` }
+                    ]] }
+                });
+            }
+            if (pending.length > shown.length) {
+                await sendSafe(chatId, `… nampilin ${shown.length} dari ${pending.length}. Proses batch ini dulu, terus /promotefix lagi buat sisanya.`);
+            }
             return;
         }
         if (promoteInFlight) { sendSafe(chatId, '⏳ Promote lagi jalan, tunggu bentar.'); return; }
@@ -2351,6 +2517,24 @@ bot.on('message', async (msg) => {
             return bot.sendMessage(chatId, `❌ *Anomali Latensi Jaringan:*\nKoneksi inter\\-process TCP menuju microservice lokal ditolak atau kehabisan waktu terputus\\.\n\\(${escapeSafeMd(error.message)}\\)`, { parse_mode: 'MarkdownV2' });
         }
     }
+    if (cmd === '/opus') {
+        const q = text.replace(/^\/opus(@\S+)?\s*/i, '').trim();
+        if (!q) { sendSafe(chatId, 'Format: `/opus <pertanyaan>` — reasoning mendalam via model frontier.\nContoh: `/opus apa itu DXVK?`'); return; }
+        if (q.length > 2000) { sendSafe(chatId, '⚠️ Pertanyaan kepanjangan (maks 2000 char).'); return; }
+        const rate = checkRate(userId);
+        if (!rate.ok) { if (rate.warn) sendSafe(chatId, '⏳ Santai bro, jeda bentar ya.'); return; }
+        if (!checkOpusBudget(userId)) { sendSafe(chatId, `⏳ Kuota /opus abis (maks ${OPUS_MAX_PER_HOUR}/jam). Model frontier mahal bro, coba lagi nanti atau pakai chat biasa.`); return; }
+        if (!OPUS_API_URL || !OPUS_API_KEY || !OPUS_API_MODEL) { sendSafe(chatId, '⚠️ /opus belum dikonfigurasi.'); return; }
+        try {
+            const reply = await withTyping(chatId, () => askOpus(q));
+            sendSafe(chatId, reply || '(opus ga balikin jawaban, coba lagi)');
+        } catch (e) {
+            recordError('opus', e);
+            const st = e.response && e.response.status;
+            sendSafe(chatId, `❌ Opus lagi ga bisa dipanggil (${st ? 'HTTP ' + st : 'error'}). Coba lagi nanti.`);
+        }
+        return;
+    }
     if (cmd && cmd !== '/cari') return;
 
     // GATE GRUP: cuma berlaku buat pesan biasa (bukan command). /cari tetep jalan.
@@ -2378,9 +2562,11 @@ bot.on('message', async (msg) => {
                     );
                     
                     if (response.data.ok && response.data.content) {
-                        let sanitizedText = escapeSafeMd(response.data.content);
-                        sanitizedText = sanitizedText.replace(/\\\*/g, '*').replace(/\\`/g, '`').replace(/\\_/, '_');
-                        return bot.sendMessage(chatId, sanitizedText, { parse_mode: 'MarkdownV2', disable_web_page_preview: true });
+                        // Samain dgn jalur /hunting command: kirim raw via sendSafe (Markdown + fallback plain).
+                        // Fix bug: escapeSafeMd lalu di-un-escape (\_→_) balikin underscore mentah → MarkdownV2
+                        // "Can't find end of Italic entity" 400, + return tanpa .catch = unhandledRejection.
+                        // sendSafe punya fallback plain-text → ga bakal throw / ga silent-fail.
+                        return sendSafe(chatId, response.data.content, { disable_web_page_preview: true });
                     } else {
                         return bot.sendMessage(chatId, "❌ Matriks data tidak ditemukan di parameter domain indeks Pre\\-installed FMHY\\.", { parse_mode: 'MarkdownV2' });
                     }
@@ -2680,6 +2866,51 @@ bot.on('document', async (msg) => {
         return bot.sendMessage(chatId, report, { parse_mode: 'MarkdownV2', reply_to_message_id: msg.message_id });
     } catch (e) {
         return bot.sendMessage(chatId, `❌ *Kesalahan Node Internal Fatal:* ${escapeSafeMd(e.message)}`, { parse_mode: 'MarkdownV2' });
+    }
+});
+
+// -----------------------------------------------------------------------------
+//  CALLBACK QUERY — tombol Reject/Promote per addfix (admin-only).
+//  callback_data format ketat: `pf:<p|r>:<ts>`. Semua input divalidasi regex.
+// -----------------------------------------------------------------------------
+bot.on('callback_query', async (q) => {
+    const ack = (t) => bot.answerCallbackQuery(q.id, t ? { text: t } : {}).catch(() => {});
+    try {
+        const fromId = q.from && q.from.id;
+        if (!isAdmin(fromId)) { await ack('🔒 Khusus admin.'); return; }   // gate: tombol cuma buat admin.
+
+        const m = /^pf:(p|r):(\d{1,16})$/.exec(String(q.data || ''));       // validasi ketat, tolak selain ini.
+        if (!m) { await ack(); return; }
+        const action = m[1];
+        const ts = Number(m[2]);
+
+        const chatId = q.message && q.message.chat && q.message.chat.id;
+        const msgId = q.message && q.message.message_id;
+        const editDone = (label) => {
+            if (chatId == null || msgId == null) return Promise.resolve();
+            // Append status di bawah kartu asli + buang tombol (reply_markup kosong). Plain-text, no parse.
+            return bot.editMessageText(`${q.message.text || ''}\n\n${label}`, {
+                chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] }
+            }).catch(() => {});
+        };
+
+        if (promoteInFlight) { await ack('⏳ Lagi promote-all, tunggu bentar.'); return; }   // hindari interleave dgn /promotefix all.
+
+        const entry = takeAddfixByTs(ts);   // sync: baca+hapus dari jsonl (fresh state tiap klik).
+        if (!entry) { await ack('Udah diproses.'); await editDone('⚠️ Udah diproses sebelumnya.'); return; }
+
+        if (action === 'p') {
+            promoteAddfix([entry]);          // sanitizeKbBody jalan di sini (gate anti-injeksi ga berubah).
+            const r = reindexKbNow();        // sync rebuild → langsung kepake kb_lookup/kb_rag.
+            await ack('✓ Dipromote');
+            await editDone(`✅ DIPROMOTE ke community.md + KB reloaded (${r.chunkCount} chunk).`);
+        } else {
+            await ack('❌ Ditolak');
+            await editDone('❌ DITOLAK — dibuang dari antrian, ga masuk KB.');
+        }
+    } catch (e) {
+        console.error('callback_query gagal:', e.message);
+        await ack('⚠️ Error, cek log server.');
     }
 });
 
