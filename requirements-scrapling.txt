@@ -1,0 +1,23 @@
+# Scrapling microservice deps (copux-scrapling)
+# Powers web_fetch (StealthyFetcher anti-Cloudflare) + /hunting (SteamRIP cf:True fallback).
+# venv VPS: /root/Bot-Telegram-release/venv
+#
+# Install: <venv>/bin/pip install -r requirements-scrapling.txt
+# WAJIB extra [fetchers] — tanpa itu StealthyFetcher crash (ModuleNotFoundError: curl_cffi)
+# → SteamRIP hunting return [] senyap (sumber cf:False tetap jalan, cf:True mati).
+#   (kejadian 2026-07-12: [fetchers] ilang → SteamRIP hilang dari hunting)
+#
+# Browser: setelah pip install, sekali:
+#   <venv>/bin/patchright install chromium      # cache ~/.cache/ms-playwright/chromium-*
+# (chromium-1228 udah ke-cache di VPS per 2026-07-12)
+
+scrapling[fetchers]==0.4.10
+
+# Pin transitif kunci (jalur anti-CF) — di-resolve otomatis oleh [fetchers], dicatat buat referensi:
+#   curl_cffi==0.15.0
+#   playwright==1.61.0
+#   patchright==1.61.1
+#   browserforge>=1.2.4
+
+# Runtime service lain (di luar scrapling): httpx, starlette, uvicorn, beautifulsoup4, anyio
+# — udah keinstall di venv; kalau rebuild dari nol, tambahin manual atau lengkapi list ini.
