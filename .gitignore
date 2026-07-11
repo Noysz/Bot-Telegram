@@ -41,6 +41,10 @@ copux_logs.txt
 
 # AI agent local config (berisi token/allowlist lokal) — JANGAN PERNAH masuk ke repo
 .claude/
+.kiro/
+
+# Python venv (scrapling/tooling di VPS) — never commit
+.venv/
 
 # Timestamped backups (mis. bot.js.bak-YYYYMMDD-HHMMSS)
 *.bak-*
