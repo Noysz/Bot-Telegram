@@ -24,6 +24,7 @@ const llmParse = require('./modules/llm-parse');
 const rateLimit = require('./modules/rate-limit');
 const addfix = require('./modules/addfix');
 const video = require('./modules/video');
+const persistence = require('./modules/persistence');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const FREEMODEL_KEY = process.env.FREEMODEL_KEY;
@@ -217,6 +218,7 @@ function checkOpusBudget(userId) {
 
 const chatHistory = {};
 const lastActive = {};
+persistence.init({ chatHistory, lastActive, HISTORY_FILE, SESSION_TTL, SAVE_DEBOUNCE_MS });
 
 // Per-session in-flight lock — cegah 2 handler async push ke chatHistory[key] bareng
 // (user kirim pesan beruntun saat LLM masih ngolah → race condition + double-cost).
@@ -648,97 +650,11 @@ async function selfHealTick() {
 //  PERSISTENCE — load saat boot, save atomic + debounce
 // =============================================================================
 
-function loadHistory() {
-    try {
-        if (!fs.existsSync(HISTORY_FILE)) return;
-        const raw = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-        const now = Date.now();
-        let n = 0;
-        for (const k in raw) {
-            const rec = raw[k];
-            if (!rec || !Array.isArray(rec.history)) continue;
-            if (now - (rec.lastActive || 0) > SESSION_TTL) continue;
-            chatHistory[k] = rec.history;
-            lastActive[k] = rec.lastActive || now;
-            n++;
-        }
-        console.log(`💾 history di-load: ${n} sesi dari disk`);
-    } catch (e) {
-        console.error('Gagal load history.json (mulai fresh):', e.message);
-    }
-}
-
-let saveTimer = null;
-function snapshot() {
-    const out = {};
-    for (const k in chatHistory) {
-        out[k] = { history: chatHistory[k], lastActive: lastActive[k] || Date.now() };
-    }
-    return JSON.stringify(out);
-}
-// Atomic write: tulis tmp dulu lalu rename — anti-korup kalau crash di tengah.
-// Sync version dipake cuma di shutdown handler (SIGINT/SIGTERM) — di hot path
-// pake saveHistoryAsync biar event loop ga blocking.
-function saveHistory() {
-    try {
-        const tmp = HISTORY_FILE + '.tmp';
-        fs.writeFileSync(tmp, snapshot());
-        fs.renameSync(tmp, HISTORY_FILE);
-    } catch (e) {
-        console.error('Gagal simpan history (sync):', e.message);
-    }
-}
-let saveInFlight = false;
-let saveInFlightPromise = null;   // ref ke promise berjalan; dipakai shutdown buat await beneran (bukan polling boolean).
-let pendingSave = false;
-async function saveHistoryAsync() {
-    if (saveInFlight) {
-        pendingSave = true;
-        return saveInFlightPromise;
-    }
-    saveInFlight = true;
-    pendingSave = false;
-    const work = (async () => {
-        try {
-            const tmp = HISTORY_FILE + '.tmp';
-            await fs.promises.writeFile(tmp, snapshot());
-            await fs.promises.rename(tmp, HISTORY_FILE);
-        } catch (e) {
-            console.error('Gagal simpan history (async):', e.message);
-        } finally {
-            saveInFlight = false;
-            saveInFlightPromise = null;
-            if (pendingSave) {
-                scheduleSave();
-            }
-        }
-    })();
-    saveInFlightPromise = work;
-    return work;
-}
-function scheduleSave() {
-    if (saveTimer) return;
-    saveTimer = setTimeout(() => { saveTimer = null; saveHistoryAsync(); }, SAVE_DEBOUNCE_MS);
-}
 
 // Simpan history pas mau mati (pm2 restart kirim SIGINT) biar obrolan ga ilang.
 async function shutdown(sig) {
     console.log(`\n${sig} diterima — simpan history lalu keluar.`);
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    // Anti race: kalau async save lagi jalan, jangan ngerebut tmp file (atomic rename pun bisa
-    // ngehapus data terbaru kalau process exit sebelum write selesai). Await promise-nya
-    // langsung, capped 5s biar PM2 ga lama bunuh kita.
-    if (saveInFlightPromise) {
-        console.log('Async save in-flight, await up to 5s...');
-        try {
-            await Promise.race([
-                saveInFlightPromise,
-                new Promise((r) => setTimeout(r, 5000))
-            ]);
-        } catch { /* ignore — exit anyway */ }
-    } else {
-        saveHistory();
-    }
+    await persistence.flush();   // clear timer + await async-save in-flight (cap 5s) | sync save
     process.exit(0);
 }
 process.on('SIGINT', () => { shutdown('SIGINT'); });
@@ -752,18 +668,18 @@ process.on('unhandledRejection', (reason) => {
         return;
     }
     console.error('⚠️  unhandledRejection:', reason && reason.stack ? reason.stack : reason);
-    try { saveHistory(); } catch (_) {}
+    try { persistence.saveHistory(); } catch (_) {}
     process.exit(1);
 });
 process.on('uncaughtException', (err) => {
     console.error('⚠️  uncaughtException:', err && err.stack ? err.stack : err);
     // Coba simpan history dulu sebelum hard-crash (kalau memang fatal).
-    try { saveHistory(); } catch (_) {}
+    try { persistence.saveHistory(); } catch (_) {}
     process.exit(1);
 });
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
-loadHistory();
+persistence.loadHistory();
 loadProfiles();
 
 // =============================================================================
@@ -1302,7 +1218,7 @@ setInterval(() => {
 
     if (cleaned || rPruned || sPruned) {
         console.log(`🧹 GC: sesi=${cleaned} rate=${rPruned} stats=${sPruned}`);
-        if (cleaned) scheduleSave();
+        if (cleaned) persistence.scheduleSave();
     }
 }, 1000 * 60 * 30);
 
@@ -1500,7 +1416,7 @@ bot.on('message', async (msg) => {
 
     if (cmd === '/start') {
         chatHistory[key] = [{ role: 'system', content: SYSTEM_PROMPT }];
-        scheduleSave();
+        persistence.scheduleSave();
         const mention = BOT_USERNAME ? '@' + BOT_USERNAME : 'bot';
         sendSafe(chatId,
             '🤖 *COPUX v2.1 Aktif*\n\n' +
@@ -1523,7 +1439,7 @@ bot.on('message', async (msg) => {
     }
     if (cmd === '/reset') {
         chatHistory[key] = [{ role: 'system', content: SYSTEM_PROMPT }];
-        scheduleSave();
+        persistence.scheduleSave();
         sendSafe(chatId, '🧹 Memori dibersihin, mulai dari awal.');
         return;
     }
@@ -2030,7 +1946,7 @@ bot.on('message', async (msg) => {
         const route = images.length ? `freemodel/${VISION_MODEL}` : `freemodel/${TEXT_MODEL}`;
         console.log(`[${key}] otak: ${route} | jawaban ${reply.length} char | inflight=${llmInFlight}/${MAX_CONCURRENT_LLM}`);
         chatHistory[key].push({ role: 'assistant', content: reply });
-        scheduleSave();
+        persistence.scheduleSave();
         await sendSafe(chatId, reply, isGroup ? { reply_to_message_id: msg.message_id } : {});
     } catch (e) {
         // JANGAN log response body — gateway kadang echo API key fragment di error.
