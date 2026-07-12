@@ -187,6 +187,98 @@ TARGETS = [
     {"name": "ElAmigos", "url": "https://elamigos.site/?s={query}", "cf": False},
 ]
 
+# Sumber API-based / SPA (bukan HTML-anchor scrape spt TARGETS) — handler custom masing2.
+# Relevance STRICT (word-boundary AND) biar ga bocor spt "war"->"warlocks".
+_HUNT_STOPWORDS = {"of", "the", "a", "and", "di", "de", "game"}
+
+
+def _rel_words(query: str) -> list:
+    return [w for w in re.sub(r'[^\w\s]', ' ', query).lower().split()
+            if len(w) > 2 and w not in _HUNT_STOPWORDS]
+
+
+def _strict_match(title: str, words: list) -> bool:
+    # word-boundary: 'war' TIDAK match 'warlocks'; semua kata query wajib ada (AND).
+    low = title.lower()
+    return bool(words) and all(re.search(r'\b' + re.escape(w) + r'\b', low) for w in words)
+
+
+async def _hunt_squid(client: httpx.AsyncClient, query: str):
+    # gog.squid.wtf: JSON API /api/games?search= (butuh quote_plus, response key 'games').
+    name = "GOG.squid"
+    try:
+        url = "https://gog.squid.wtf/api/games?search=" + urllib.parse.quote_plus(query)
+        r = await client.get(url, headers={"Accept": "application/json"})
+        if r.status_code != 200:
+            return name, []
+        d = r.json()
+        items = d.get("games") or d.get("data") or (d if isinstance(d, list) else [])
+        words = _rel_words(query)
+        out = []
+        for it in items:
+            title, slug = it.get("title", ""), it.get("slug", "")
+            if slug and _strict_match(title, words):
+                out.append({"title": title, "link": f"https://gog.squid.wtf/game/{slug}"})
+            if len(out) >= 2:
+                break
+        return name, out
+    except Exception:
+        return name, []
+
+
+async def _hunt_goggames(client: httpx.AsyncClient, query: str):
+    # gog-games.to: SPA, API /api/web/all-games balik FULL katalog (~6400) -> filter client-side.
+    name = "GOG-Games"
+    try:
+        r = await client.get("https://gog-games.to/api/web/all-games",
+                             headers={"Accept": "application/json"}, timeout=30.0)
+        if r.status_code != 200:
+            return name, []
+        d = r.json()
+        items = d if isinstance(d, list) else d.get("data", [])
+        words = _rel_words(query)
+        out = []
+        for it in items:
+            title, slug = it.get("title", ""), it.get("slug", "")
+            if slug and _strict_match(title, words):
+                out.append({"title": title, "link": f"https://gog-games.to/game/{slug}"})
+            if len(out) >= 2:
+                break
+        return name, out
+    except Exception:
+        return name, []
+
+
+async def _hunt_rexa(client: httpx.AsyncClient, query: str):
+    # rexagames.com: forum IPS, search /search/?q=&type=downloads_file -> anchor /files/file/.
+    # Dedup by clean path (buang ?do=findComment), strip varian "More information about".
+    from bs4 import BeautifulSoup
+    name = "RexaGames"
+    try:
+        url = ("https://rexagames.com/search/?q=" + urllib.parse.quote_plus(query)
+               + "&type=downloads_file")
+        r = await client.get(url, headers={"User-Agent": random.choice(USER_AGENTS)},
+                            follow_redirects=True)
+        if r.status_code != 200:
+            return name, []
+        soup = BeautifulSoup(r.text, "html.parser")
+        words = _rel_words(query)
+        out, seen = [], set()
+        for a in soup.find_all("a", href=re.compile(r'/files/file/\d')):
+            href = (a.get("href", "") or "").split("?")[0].rstrip("/")
+            title = re.sub(r'\s+', ' ', (a.get("title") or a.get_text() or "").strip())
+            title = re.sub(r'^More information about\s*.?', '', title).strip('"')
+            if not href or href in seen or not title or len(title) < 4:
+                continue
+            if _strict_match(title, words):
+                seen.add(href)
+                out.append({"title": title, "link": href})
+            if len(out) >= 2:
+                break
+        return name, out
+    except Exception:
+        return name, []
+
 def _parse_results(html: str, target: dict, query: str) -> list:
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, 'html.parser')
@@ -282,6 +374,9 @@ async def hunt_game_handler(request):
     try:
         async with httpx.AsyncClient(verify=False, timeout=25.0) as client:
             tasks = [_fetch_target(client, t, query) for t in TARGETS]
+            tasks += [_hunt_squid(client, query),
+                      _hunt_goggames(client, query),
+                      _hunt_rexa(client, query)]
             results_tuples = await asyncio.gather(*tasks)
             
         grouped = {k: v for k, v in results_tuples if v}
