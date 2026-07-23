@@ -116,6 +116,8 @@ Secara arsitektur lebih dekat ke DXVK 2.x path, tapi tetap cek driver.
 
 **BOT RULE:** kalau user Mali laporan "artifact tekstur" / "black screen di game" (bukan crash), sebelum suruh ganti DXVK version, saranin coba `USE_CPU_BCN=all` (bionic) atau `ENABLE_BCN_COMPUTE=1` (bannerlator) dulu — lebih murah dari swap wrapper.
 
+⚠️ **Trade-off RAM (dari maintainer Bionic-wrapper #37/#38, Mali-G715):** BCn CPU/emulation decode **naikin RAM usage 3x-5x** — karena image uncompressed yang jauh lebih besar harus disimpan di GPU memory (yang ga support compressed memory). Efeknya: game heavy-texture (UE4, RE-series) bisa **OOM-crash setelah beberapa menit** justru KARENA BCn decode aktif, bukan karena wrapper bug. Kalau user Mali RAM-terbatas laporan "crash setelah beberapa menit main" (bukan crash instant) + BCn decode ON → curigai OOM: turunkan resolusi/texture, atau terima artifact daripada crash. Maintainer sedang retune garbage-collection staging resource, tapi ini limit fundamental (Bionic #37, #38).
+
 ---
 
 ## Failure mapping

@@ -225,6 +225,7 @@ Single `.wcp` covering D3D1-12: DXVK 2.7.1 (yang udah include d7vk D3D1-7 path) 
 8. User crash random + bingung layer mana → AIO-Graphics-Test untuk diagnostic dulu sebelum tweak.
 9. User Ludashi-plus + LSFG ga jalan v3.1.2-pre2+ → ingatin: **Lossless.dll BUKAN bundled lagi** di pre2 (compliance). User wajib **Settings → Import Lossless.dll** manual. v3.1.1 dan lebih lama masih bundled.
 10. User pengen 1-file DX1-12 wrapper → saran dxvk-unified.wcp (TAPI jelasin bukan d7vk merge baru, itu DXVK 2.7.1 packaging).
+11. ⚠️ **AI-bot reply di issue Bannerlator ≠ ground truth.** Bannerlator ship auto-responder ("🤖 Bannerlator AI") yang balas issue otomatis. Bot ini **pernah meng-halu bukti**: di Bannerlator #100 (Adreno 650) dia ngutip box64 spam + D3D9 error yang **0 hit di log asli** (build-nya arm64ec, box64 ga terlibat), lalu nyaranin `Wine 7.0`/`DXVK 1.10.3`/VirGL — semua di-**sanggah maintainer manusia** di reply berikutnya. Kalau user kutip "kata AI Bannerlator di issue X...", jangan langsung amini; cek apakah ada koreksi maintainer manusia setelahnya. Versi/fix yang cuma datang dari AI-bot = `[UNVERIFIED]`, bukan `[VERIFIED]`.
 
 ---
 
