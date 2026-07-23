@@ -55,6 +55,7 @@ Tujuan file ini: bot tau **mana yang harus direkomendasiin**, **mana yang vaporw
 - **Repo:** github.com/Producdevity/gamehub-lite
 - **Posisi:** base ringan GameHub Lite, dipakai juga sebagai referensi BannerHub Lite.
 - **Catatan security:** v5.1.8 redacts Steam/auth token fields di logs. Kalau user pernah post log lama yang berisi token, suruh hapus/redact.
+- **[COMMUNITY SIGNAL] Container gagal init / stuck saat start:** coba ganti compatibility layer version — user report switch Proton 10.0 → 11.0 bikin container init normal (GameHub-Lite #130, Snapdragon 7 Gen3). Ini fix lintas-chipset, bukan device-specific.
 
 ### GameNative — utkarshdalal
 

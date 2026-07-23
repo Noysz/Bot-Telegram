@@ -46,6 +46,7 @@ Fitur penting (anti-halu, ini yg ada bener-bener di v3.8.0):
 - Per-game PC Audio Settings (PulseAudio recording-compatible mode)
 - Community Game Configs browser (dari `bannerhub-game-configs` repo)
 - Offline Steam launch, root access management, Japanese locale
+- **Package name:** `banner.hub` — storage di `/data/data/banner.hub/` (BannerHub #17). Relevan kalau user debug storage path atau wipe data manual.
 
 ### BannerHub Lite v1.0.2 [VERIFIED — 2026-05-12]
 Base GameHub Lite 5.1.4 (Producdevity vanilla, no ReVanced). APK ~47 MB.

@@ -64,6 +64,10 @@ Android: 16
 - DX12: boleh tes VKD3D untuk game ringan saja.
 - Fallback tetap `dxvk-1.7.2.wcp` / Sarek 1.11.1/1.12.0 kalau muncul shader crash, black screen, atau VRAM pressure.
 
+### Dimensity 1200 / Mali-G77 MC7
+
+**[COMMUNITY SIGNAL]** Dimensity 1200 (Mali-G77 MC7) dengan driver MediaTek stock cuma expose ~69 Vulkan extension. DXVK 2.x (mis. 2.7.3) butuh beberapa extension yang driver MTK ini **tidak implement** → ini gap driver-level, bukan bug yang bisa di-fix code. Untuk chip lama begini: pakai DXVK-Sarek / 1.7.2 path, jangan chase DXVK 2.x (Bannerlator #110).
+
 ### Dimensity 7200/8100/8200/8300 family
 
 GPU G610/G615 sering tergantung driver vendor. Jangan pakai rule model-only.
