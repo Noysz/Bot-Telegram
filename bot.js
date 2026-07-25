@@ -1432,8 +1432,8 @@ bot.on('message', async (msg) => {
             '/reset — Bersihkan memori obrolan.\n\n' +
             `*Di grup:* mention ${mention} atau reply pesan gw.\n\n` +
             '———\n' +
-            '💡 _Bot ini jalan pakai kredit dari freemodel. Daftar lewat link gw (gratis):_\n' +
-            'https://freemodel.dev/invite/FRE-681bce55'
+            '💡 _Bot ini jalan pakai kredit dari QuickAITool. Daftar lewat link gw (gratis):_\n' +
+            'https://app.quickaitool.com/?ref=HIP257XH'
         );
         return;
     }
