@@ -25,6 +25,16 @@ const rateLimit = require('./modules/rate-limit');
 const addfix = require('./modules/addfix');
 const video = require('./modules/video');
 const persistence = require('./modules/persistence');
+process.env.ACCESS_STORE_PATH = process.env.ACCESS_STORE_PATH || path.join(__dirname, 'data', 'access.json');
+const access = require('./modules/access');
+const ACCESS_GATE_MSG =
+    '🔒 *Akses COPUX dikunci*\n\n' +
+    'COPUX jalan pakai kredit QuickAITool. Biar bisa dipakai:\n' +
+    '1️⃣ Daftar (gratis) lewat link gw:\n' +
+    'https://app.quickaitool.com/?ref=HIP257XH\n' +
+    '2️⃣ Screenshot layar yg nunjukin lo udah *sign-in*.\n' +
+    '3️⃣ Kirim screenshot itu ke chat ini.\n\n' +
+    'Nanti gw review & approve. Abis itu COPUX kebuka. 🙌';
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const FREEMODEL_KEY = process.env.FREEMODEL_KEY;
@@ -1414,6 +1424,34 @@ bot.on('message', async (msg) => {
     // Normalisasi command (di grup bisa /reset@NamaBot)
     const cmd = text.startsWith('/') ? text.split(/\s+/)[0].replace(/@.*/, '').toLowerCase() : '';
 
+    // Jangan gate pesan grup yang bukan buat bot (cegah spam lock message di grup).
+    const talkingToBot = !isGroup || !!cmd
+        || (msg.reply_to_message && BOT_ID && msg.reply_to_message.from && msg.reply_to_message.from.id === BOT_ID)
+        || (BOT_USERNAME && new RegExp('@' + BOT_USERNAME + '(?!\\w)', 'i').test(text));
+
+    // ==== QuickAI access gate — user biasa wajib approve (owner bypass) ====
+    if (talkingToBot && userId != null && !isAdmin(userId) && !access.isApproved(userId)) {
+        const proof = Array.isArray(msg.photo) && msg.photo.length ? msg.photo[msg.photo.length - 1] : null;
+        if (proof) {
+            const rate = rateLimit.checkRate(userId);
+            if (!rate.ok) { if (rate.warn) sendSafe(chatId, '⏳ Santai bro, jeda bentar ya.'); return; }
+            const uname = displayName(msg.from);
+            for (const adminId of ADMIN_IDS) {
+                bot.sendPhoto(adminId, proof.file_id, {
+                    caption: `🔐 Permintaan akses COPUX\nUser: ${uname}\nID: ${userId}`,
+                    reply_markup: { inline_keyboard: [[
+                        { text: '✅ Approve', callback_data: `ua:a:${userId}` },
+                        { text: '❌ Reject', callback_data: `ua:r:${userId}` }
+                    ]] }
+                }).catch((e) => console.error('kirim kartu akses gagal:', e.message));
+            }
+            sendSafe(chatId, '📨 Bukti sign-in lo udah dikirim ke admin. Tunggu di-approve — nanti gw kabarin di sini.');
+            return;
+        }
+        sendSafe(chatId, ACCESS_GATE_MSG);
+        return;
+    }
+
     if (cmd === '/start') {
         chatHistory[key] = [{ role: 'system', content: SYSTEM_PROMPT }];
         persistence.scheduleSave();
@@ -2006,6 +2044,31 @@ bot.on('callback_query', async (q) => {
         const fromId = q.from && q.from.id;
         if (!isAdmin(fromId)) { await ack('🔒 Khusus admin.'); return; }   // gate: tombol cuma buat admin.
 
+        // ==== user-access approval buttons (ua:a/r:<userId>) ====
+        const uaM = /^ua:(a|r):(\d{1,16})$/.exec(String(q.data || ''));
+        if (uaM) {
+            const targetId = uaM[2];
+            const approveIt = uaM[1] === 'a';
+            const cbChatId = q.message && q.message.chat && q.message.chat.id;
+            const cbMsgId = q.message && q.message.message_id;
+            const editCard = (label) => {
+                if (cbChatId == null || cbMsgId == null) return Promise.resolve();
+                return bot.editMessageCaption(`${(q.message && q.message.caption) || ''}\n\n${label}`, {
+                    chat_id: cbChatId, message_id: cbMsgId, reply_markup: { inline_keyboard: [] }
+                }).catch(() => {});
+            };
+            if (approveIt) {
+                access.approve(targetId, { name: '' });
+                await ack('✓ Di-approve');
+                await editCard(`✅ APPROVED — akses COPUX dibuka (${targetId}).`);
+                bot.sendMessage(targetId, '✅ Akses COPUX lo dibuka! Ketik /start buat mulai.').catch(() => {});
+            } else {
+                await ack('❌ Ditolak');
+                await editCard(`❌ REJECTED — akses ditolak (${targetId}).`);
+                bot.sendMessage(targetId, '❌ Permintaan akses lo ditolak. Pastiin udah daftar via link gw & SS-nya bener, terus kirim ulang.').catch(() => {});
+            }
+            return;
+        }
         const m = /^pf:(p|r):(\d{1,16})$/.exec(String(q.data || ''));       // validasi ketat, tolak selain ini.
         if (!m) { await ack(); return; }
         const action = m[1];
