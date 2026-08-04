@@ -28,6 +28,7 @@ const persistence = require('./modules/persistence');
 process.env.ACCESS_STORE_PATH = process.env.ACCESS_STORE_PATH || path.join(__dirname, 'data', 'access.json');
 const access = require('./modules/access');
 const wcpWatch = require('./modules/wcp-watch');
+const wcpBuild = require('./modules/wcp-build');
 const ACCESS_GATE_MSG =
     '🔒 *Akses COPUX dikunci*\n\n' +
     'COPUX jalan pakai kredit QuickAITool. Biar bisa dipakai:\n' +
@@ -700,6 +701,12 @@ try {
     console.log(`🧩 WCP watch init: ${wcpInfo.sources} sumber, ${wcpInfo.seen} seen, channel=${wcpInfo.channel}`);
     if (/^(1|true|on)$/i.test(String(process.env.WCP_WATCH_ENABLED || ''))) wcpWatch.start();
 } catch (e) { console.error('WCP watch init gagal:', e.message); }
+
+// WCP builder (on-demand /buildwcp — user bawa .tar.gz, bot bungkus jadi .wcp).
+try {
+    const bInfo = wcpBuild.init({ bot });
+    console.log(`🔨 WCP build init: max ${bInfo.maxMB}MB, concurrent ${bInfo.maxConcurrent}`);
+} catch (e) { console.error('WCP build init gagal:', e.message); }
 
 // =============================================================================
 //  SYSTEM PROMPT (persona COPUX-FourFect — versi 2 KELUARGA emulator)
@@ -1638,6 +1645,18 @@ bot.on('message', async (msg) => {
         } catch (e) {
             recordError('wcpwatch', e);
             sendSafe(chatId, `❌ wcpwatch gagal: ${String(e.message || e).slice(0, 160)}`);
+        }
+        return;
+    }
+    if (cmd === '/buildwcp') {
+        // approved user boleh (gate akses udah jalan di atas); rate-limit cegah abuse (build berat).
+        const rate = rateLimit.checkRate(userId);
+        if (!rate.ok) { if (rate.warn) sendSafe(chatId, '⏳ Santai bro, jeda bentar ya.'); return; }
+        try {
+            await wcpBuild.handleCommand(msg, { chatId, userId, sendSafe });
+        } catch (e) {
+            recordError('buildwcp', e);
+            sendSafe(chatId, `❌ buildwcp error: ${String(e.message || e).slice(0, 160)}`);
         }
         return;
     }
