@@ -30,6 +30,7 @@ const access = require('./modules/access');
 const wcpWatch = require('./modules/wcp-watch');
 const wcpBuild = require('./modules/wcp-build');
 const wcpHook = require('./modules/wcp-hook');
+const gameConfig = require('./modules/gameconfig');
 const ACCESS_GATE_MSG =
     '🔒 *Akses COPUX dikunci*\n\n' +
     'COPUX jalan pakai kredit QuickAITool. Biar bisa dipakai:\n' +
@@ -716,6 +717,13 @@ try {
     console.log(`🪝 WCP hook init: ${hInfo.repos.join('/')}, ${hInfo.seen} seen, channel=${hInfo.channel}`);
     if (/^(1|true|on)$/i.test(String(process.env.WCP_HOOK_ENABLED || ''))) wcpHook.start();
 } catch (e) { console.error('WCP hook init gagal:', e.message); }
+
+// Game-config puller (/gameconfig — cari setting game dari repo komunitas
+// The412Banner). On-demand, no state. Matiin via GAMECONFIG_ENABLED=0.
+try {
+    const gcInfo = gameConfig.init({ bot, dataDir: DATA_DIR, log: console.log, errLog: console.error, recordError });
+    console.log(`🎮 GameConfig init: enabled=${gcInfo.enabled}, repo=${gcInfo.repo}, ttl=${gcInfo.ttlMin}m`);
+} catch (e) { console.error('GameConfig init gagal:', e.message); }
 
 // =============================================================================
 //  SYSTEM PROMPT (persona COPUX-FourFect — versi 2 KELUARGA emulator)
@@ -1797,6 +1805,18 @@ bot.on('message', async (msg) => {
             recordError('opus', e);
             const st = e.response && e.response.status;
             sendSafe(chatId, `❌ Opus lagi ga bisa dipanggil (${st ? 'HTTP ' + st : 'error'}). Coba lagi nanti.`);
+        }
+        return;
+    }
+    if (cmd === '/gameconfig' || cmd === '/gc' || cmd === '/config') {
+        // terbuka buat user (gate akses global udah jalan di atas); rate-limit cegah abuse.
+        const rate = rateLimit.checkRate(userId);
+        if (!rate.ok) { if (rate.warn) sendSafe(chatId, '⏳ Santai bro, jeda bentar ya.'); return; }
+        try {
+            await gameConfig.handleCommand(msg, { chatId, userId, sendSafe });
+        } catch (e) {
+            recordError('gameconfig', e);
+            sendSafe(chatId, `❌ gameconfig error: ${String(e.message || e).slice(0, 160)}`);
         }
         return;
     }
