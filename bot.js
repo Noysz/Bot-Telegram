@@ -27,6 +27,7 @@ const video = require('./modules/video');
 const persistence = require('./modules/persistence');
 process.env.ACCESS_STORE_PATH = process.env.ACCESS_STORE_PATH || path.join(__dirname, 'data', 'access.json');
 const access = require('./modules/access');
+const wcpWatch = require('./modules/wcp-watch');
 const ACCESS_GATE_MSG =
     '🔒 *Akses COPUX dikunci*\n\n' +
     'COPUX jalan pakai kredit QuickAITool. Biar bisa dipakai:\n' +
@@ -691,6 +692,14 @@ process.on('uncaughtException', (err) => {
 fs.mkdirSync(DATA_DIR, { recursive: true });
 persistence.loadHistory();
 loadProfiles();
+
+// WCP watcher (auto-post rilis komponen Winlator ke channel) — opsional via env.
+// Butuh WCP_SOURCES + WCP_CHANNEL_ID; autostart cuma kalau WCP_WATCH_ENABLED=1.
+try {
+    const wcpInfo = wcpWatch.init({ bot, dataDir: DATA_DIR, statePath: path.join(DATA_DIR, 'wcp-seen.json') });
+    console.log(`🧩 WCP watch init: ${wcpInfo.sources} sumber, ${wcpInfo.seen} seen, channel=${wcpInfo.channel}`);
+    if (/^(1|true|on)$/i.test(String(process.env.WCP_WATCH_ENABLED || ''))) wcpWatch.start();
+} catch (e) { console.error('WCP watch init gagal:', e.message); }
 
 // =============================================================================
 //  SYSTEM PROMPT (persona COPUX-FourFect — versi 2 KELUARGA emulator)
@@ -1597,6 +1606,38 @@ bot.on('message', async (msg) => {
         } catch (e) {
             recordError('reindexkb', e);
             sendSafe(chatId, `❌ Reindex RAG gagal: ${String(e.message || e).slice(0, 160)}`);
+        }
+        return;
+    }
+    if (cmd === '/wcpwatch') {
+        if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
+        const arg = text.replace(/^\/wcpwatch(@\S+)?\s*/i, '').trim().toLowerCase();
+        try {
+            if (arg === 'on') {
+                sendSafe(chatId, wcpWatch.start() ? '✅ WCP watch ON.' : '⚠️ Gagal start (cek WCP_SOURCES / WCP_CHANNEL_ID).');
+            } else if (arg === 'off') {
+                sendSafe(chatId, wcpWatch.stop() ? '🛑 WCP watch OFF.' : 'ℹ️ Watch emang lagi mati.');
+            } else if (arg === 'now') {
+                sendSafe(chatId, '⏳ Poll manual jalan…');
+                const r = await wcpWatch.pollOnce();
+                sendSafe(chatId, `📊 Poll: ${r.posted || 0} di-post, ${r.deferred || 0} ditunda, ${r.errors || 0} error, ${r.discovered || 0} discovered.`);
+            } else if (arg === 'seed') {
+                const r = await wcpWatch.seed();
+                sendSafe(chatId, `🌱 Seed: ${r.discovered || 0} entri di-record (0 di-post).`);
+            } else {
+                const s = wcpWatch.status();
+                sendSafe(chatId,
+                    `🧩 *WCP watch*\n` +
+                    `status: ${s.running ? 'ON' : 'OFF'}\n` +
+                    `sumber: ${s.sources.join(', ') || '(kosong)'}\n` +
+                    `channel: ${s.channel || '(belum set)'}\n` +
+                    `tipe: ${s.types.join(', ')}\n` +
+                    `seen: ${s.seen} | tiap ${s.pollMinutes}m | cap ${s.maxPerPoll}/poll, ${s.maxMB}MB/file\n\n` +
+                    `perintah: \`/wcpwatch on|off|now|seed\``);
+            }
+        } catch (e) {
+            recordError('wcpwatch', e);
+            sendSafe(chatId, `❌ wcpwatch gagal: ${String(e.message || e).slice(0, 160)}`);
         }
         return;
     }
