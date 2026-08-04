@@ -29,6 +29,7 @@ process.env.ACCESS_STORE_PATH = process.env.ACCESS_STORE_PATH || path.join(__dir
 const access = require('./modules/access');
 const wcpWatch = require('./modules/wcp-watch');
 const wcpBuild = require('./modules/wcp-build');
+const wcpHook = require('./modules/wcp-hook');
 const ACCESS_GATE_MSG =
     '🔒 *Akses COPUX dikunci*\n\n' +
     'COPUX jalan pakai kredit QuickAITool. Biar bisa dipakai:\n' +
@@ -707,6 +708,14 @@ try {
     const bInfo = wcpBuild.init({ bot });
     console.log(`🔨 WCP build init: max ${bInfo.maxMB}MB, concurrent ${bInfo.maxConcurrent}`);
 } catch (e) { console.error('WCP build init gagal:', e.message); }
+
+// WCP hook (auto-build DXVK/VKD3D dari rilis upstream resmi → post channel).
+// Dorman sampai channel di-set + WCP_HOOK_ENABLED=1. Pakai mesin wcpBuild.
+try {
+    const hInfo = wcpHook.init({ bot, wcpBuild, dataDir: DATA_DIR, statePath: path.join(DATA_DIR, 'wcp-hook-seen.json') });
+    console.log(`🪝 WCP hook init: ${hInfo.repos.join('/')}, ${hInfo.seen} seen, channel=${hInfo.channel}`);
+    if (/^(1|true|on)$/i.test(String(process.env.WCP_HOOK_ENABLED || ''))) wcpHook.start();
+} catch (e) { console.error('WCP hook init gagal:', e.message); }
 
 // =============================================================================
 //  SYSTEM PROMPT (persona COPUX-FourFect — versi 2 KELUARGA emulator)
@@ -1645,6 +1654,37 @@ bot.on('message', async (msg) => {
         } catch (e) {
             recordError('wcpwatch', e);
             sendSafe(chatId, `❌ wcpwatch gagal: ${String(e.message || e).slice(0, 160)}`);
+        }
+        return;
+    }
+    if (cmd === '/wcphook') {
+        if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
+        const arg = text.replace(/^\/wcphook(@\S+)?\s*/i, '').trim().toLowerCase();
+        try {
+            if (arg === 'on') {
+                sendSafe(chatId, wcpHook.start() ? '✅ WCP hook ON.' : '⚠️ Gagal start (cek channel / wcpBuild).');
+            } else if (arg === 'off') {
+                sendSafe(chatId, wcpHook.stop() ? '🛑 WCP hook OFF.' : 'ℹ️ Hook emang lagi mati.');
+            } else if (arg === 'now') {
+                sendSafe(chatId, '⏳ Poll hook jalan…');
+                const r = await wcpHook.pollOnce();
+                sendSafe(chatId, `📊 Hook: ${r.posted || 0} di-post, ${r.deferred || 0} ditunda, ${r.errors || 0} error, ${r.discovered || 0} discovered.`);
+            } else if (arg === 'seed') {
+                const r = await wcpHook.seed();
+                sendSafe(chatId, `🌱 Seed hook: ${r.discovered || 0} rilis di-record (0 di-post).`);
+            } else {
+                const s = wcpHook.status();
+                sendSafe(chatId,
+                    `🪝 *WCP hook* (auto-build rilis resmi)\n` +
+                    `status: ${s.running ? 'ON' : 'OFF'}\n` +
+                    `repo: ${s.repos.join(', ')}\n` +
+                    `channel: ${s.channel || '(belum set)'}\n` +
+                    `seen: ${s.seen} | tiap ${s.pollMinutes}m\n\n` +
+                    `perintah: \`/wcphook on|off|now|seed\``);
+            }
+        } catch (e) {
+            recordError('wcphook', e);
+            sendSafe(chatId, `❌ wcphook gagal: ${String(e.message || e).slice(0, 160)}`);
         }
         return;
     }

@@ -147,6 +147,7 @@ function normalizeStructure(root) {
 function detectType(files) {
   const base = files.map((f) => f.split('/').pop().toLowerCase());
   const has = (n) => base.includes(n);
+  if (has('wowbox64.dll')) return 'WOWBox64';        // cek dulu (dll spesifik) sblm box64 binary.
   if (base.some((b) => b === 'box64')) return 'Box64';
   if (has('libarm64ecfex.dll') || has('libwow64fex.dll')) return 'FEXCore';
   if (has('d3d12core.dll') || has('d3d12.dll')) return 'VKD3D';
@@ -170,6 +171,13 @@ function buildProfile(root, type) {
     if (bin !== 'box64') fs.renameSync(path.join(root, bin), path.join(root, 'box64'));
     try { fs.chmodSync(path.join(root, 'box64'), 0o755); } catch {}  // box64 wajib executable.
     pushMap('box64', '${bindir}/box64');
+  } else if (type === 'WOWBox64') {
+    const dll = all.find((f) => f.split('/').pop().toLowerCase() === 'wowbox64.dll');
+    if (!dll) throw new Error('wowbox64.dll ga ketemu di arsip');
+    fs.mkdirSync(path.join(root, 'system32'), { recursive: true });
+    const rel = 'system32/wowbox64.dll';
+    if (dll !== rel) fs.renameSync(path.join(root, dll), path.join(root, rel));
+    pushMap(rel, '${system32}/wowbox64.dll');
   } else if (type === 'FEXCore') {
     const fex = all.filter((f) => /(?:^|\/)(libarm64ecfex|libwow64fex)\.dll$/i.test(f));
     if (!fex.length) throw new Error('DLL FEX (libarm64ecfex/libwow64fex) ga ketemu');
@@ -223,6 +231,7 @@ function normalizeType(t) {
   if (m === 'dxvk' || m === 'd7vk') return 'DXVK';
   if (m === 'vkd3d' || m === 'vkd3d-proton') return 'VKD3D';
   if (m === 'fexcore' || m === 'fex') return 'FEXCore';
+  if (m === 'wowbox64' || m === 'wow' || m === 'wowbox') return 'WOWBox64';
   if (m === 'box64') return 'Box64';
   return null;
 }
@@ -230,7 +239,7 @@ function normalizeType(t) {
 function safeVersionFromName(origName, hint) {
   if (hint) return String(hint).replace(/[^A-Za-z0-9._-]/g, '').slice(0, 60) || 'unknown';
   let n = String(origName || 'component');
-  n = n.replace(/\.(tar\.gz|tgz|tar\.xz|txz|tar)$/i, '');
+  n = n.replace(/\.(tar\.gz|tgz|tar\.xz|txz|tar\.zst|tzst|tar)$/i, '');
   return n.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60) || 'component';
 }
 
@@ -275,8 +284,8 @@ async function handleCommand(msg, ctx) {
     return;
   }
   const name = String(doc.file_name || '');
-  if (!/\.(tar\.gz|tgz|tar\.xz|txz|tar)$/i.test(name)) {
-    sendSafe(chatId, `❌ Format ga didukung: \`${name.slice(0, 60)}\`. Kirim .tar.gz / .tgz / .tar.xz.`);
+  if (!/\.(tar\.gz|tgz|tar\.xz|txz|tar\.zst|tzst|tar)$/i.test(name)) {
+    sendSafe(chatId, `❌ Format ga didukung: \`${name.slice(0, 60)}\`. Kirim .tar.gz / .tgz / .tar.xz / .tar.zst.`);
     return;
   }
   if (doc.file_size && doc.file_size > cfg.maxDownloadBytes) {
