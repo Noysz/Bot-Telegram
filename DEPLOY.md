@@ -1,5 +1,11 @@
 # DEPLOY — COPUX bot (single source of truth)
 
+> **Runtime aktif sejak 2026-08-15:** VPS sudah dipensiunkan. COPUX kembali live
+> di Termux/proot melalui PM2: `9router`, `copux`, dan `copux-scrapling`.
+> Source tetap `/root/Bot-Telegram`; runtime live ada di
+> `/root/Bot-Telegram-release`. Bagian VPS di bawah dipertahankan sebagai
+> catatan historis dan bukan target deploy aktif.
+
 > Ditetapkan 2026-07-11 buat stop repo-drift (dulu ada 2 dir VPS + edit-langsung-live
 > bikin git kacau). Aturan: **box repo = sumber → GitHub `main` → VPS pull**. JANGAN
 > edit langsung di VPS lagi.

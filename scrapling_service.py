@@ -14,6 +14,7 @@ Run: /root/.venv/bin/python scrapling_service.py
 """
 import asyncio
 import ipaddress
+import os
 import re
 import urllib.parse
 import httpx
@@ -28,6 +29,20 @@ PORT = 8765
 MAX_CHARS = 7000
 FETCH_TIMEOUT_MS = 25000
 MAX_CONCURRENT = 3
+
+
+def _find_chromium_executable():
+    configured = os.environ.get("CHROMIUM_EXECUTABLE", "").strip()
+    candidates = (
+        configured,
+        "/usr/lib/chromium/chromium",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    )
+    return next((path for path in candidates if path and os.path.isfile(path) and os.access(path, os.X_OK)), None)
+
+
+CHROMIUM_EXECUTABLE = _find_chromium_executable()
 
 _sem = asyncio.Semaphore(MAX_CONCURRENT)
 
@@ -79,12 +94,14 @@ async def fetch(request):
         import anyio
 
         def _blocking_fetch():
-            return StealthyFetcher.fetch(
-                url,
-                headless=True,
-                network_idle=False,
-                timeout=FETCH_TIMEOUT_MS,
-            )
+            options = {
+                "headless": True,
+                "network_idle": False,
+                "timeout": FETCH_TIMEOUT_MS,
+            }
+            if CHROMIUM_EXECUTABLE:
+                options["executable_path"] = CHROMIUM_EXECUTABLE
+            return StealthyFetcher.fetch(url, **options)
 
         async with _sem:
             page = await anyio.to_thread.run_sync(_blocking_fetch)

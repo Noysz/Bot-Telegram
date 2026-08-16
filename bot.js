@@ -1784,7 +1784,8 @@ bot.on('message', async (msg) => {
                 // Kalau error, sendSafe otomatis bakal fallback ke plain text.
                 return sendSafe(chatId, response.data.content, { disable_web_page_preview: true });
             } else {
-                return bot.sendMessage(chatId, "❌ Matriks data tidak ditemukan di parameter domain indeks Pre\\-installed FMHY\\.", { parse_mode: 'MarkdownV2' });
+                const errMsg = response.data.error || "Matriks data tidak ditemukan di parameter domain indeks Pre-installed FMHY.";
+                return bot.sendMessage(chatId, `❌ *Resolusi Pencarian Gagal:*\n${escapeSafeMd(errMsg)}`, { parse_mode: 'MarkdownV2' });
             }
         } catch (error) {
             return bot.sendMessage(chatId, `❌ *Anomali Latensi Jaringan:*\nKoneksi inter\\-process TCP menuju microservice lokal ditolak atau kehabisan waktu terputus\\.\n\\(${escapeSafeMd(error.message)}\\)`, { parse_mode: 'MarkdownV2' });
@@ -1853,7 +1854,8 @@ bot.on('message', async (msg) => {
                         // sendSafe punya fallback plain-text → ga bakal throw / ga silent-fail.
                         return sendSafe(chatId, response.data.content, { disable_web_page_preview: true });
                     } else {
-                        return bot.sendMessage(chatId, "❌ Matriks data tidak ditemukan di parameter domain indeks Pre\\-installed FMHY\\.", { parse_mode: 'MarkdownV2' });
+                        const errMsg = response.data.error || "Matriks data tidak ditemukan di parameter domain indeks Pre-installed FMHY.";
+                        return bot.sendMessage(chatId, `❌ *Resolusi Pencarian Gagal:*\n${escapeSafeMd(errMsg)}`, { parse_mode: 'MarkdownV2' });
                     }
                 } catch (error) {
                     return bot.sendMessage(chatId, `❌ *Anomali Latensi Jaringan:*\nKoneksi inter\\-process TCP menuju microservice lokal ditolak atau kehabisan waktu terputus\\.\n\\(${escapeSafeMd(error.message)}\\)`, { parse_mode: 'MarkdownV2' });
@@ -2236,7 +2238,8 @@ async function handleDlcCommand(chatId, appId, bot) {
         );
         
         if (response.data.ok) {
-            const iniContent = response.data.content;
+            // Escape literal backslashes and backticks inside MarkdownV2 codeblock ( Telegram rule for pre/code )
+            const iniContent = response.data.content.replace(/\\/g, '\\\\').replace(/`/g, '\\`');
             return bot.sendMessage(chatId, 
                 `Berikut adalah abstraksi matriks generator sub\\-aset \\(DLC\\) terkini untuk instrumen ID *${escapeSafeMd(appId)}*:\n\n\`\`\`ini\n${iniContent}\n\`\`\``, 
                 { parse_mode: 'MarkdownV2' }
