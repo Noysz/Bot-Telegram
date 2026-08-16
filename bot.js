@@ -33,9 +33,9 @@ const wcpHook = require('./modules/wcp-hook');
 const gameConfig = require('./modules/gameconfig');
 const ACCESS_GATE_MSG =
     '🔒 *Akses COPUX dikunci*\n\n' +
-    'COPUX jalan pakai kredit QuickAITool. Biar bisa dipakai:\n' +
-    '1️⃣ Daftar (gratis) lewat link gw:\n' +
-    'https://app.quickaitool.com/?ref=HIP257XH\n' +
+    'COPUX jalan pakai kredit AgentRouter. Biar bisa dipakai:\n' +
+    '1️⃣ Daftar (gratis) lewat link gw — *wajib pakai akun GitHub lama* (bukan akun baru):\n' +
+    'https://agentrouter.org/register?aff=lokZ\n' +
     '2️⃣ Screenshot layar yg nunjukin lo udah *sign-in*.\n' +
     '3️⃣ Kirim screenshot itu ke chat ini.\n\n' +
     'Nanti gw review & approve. Abis itu COPUX kebuka. 🙌';
@@ -1503,8 +1503,8 @@ bot.on('message', async (msg) => {
             '/reset — Bersihkan memori obrolan.\n\n' +
             `*Di grup:* mention ${mention} atau reply pesan gw.\n\n` +
             '———\n' +
-            '💡 _Bot ini jalan pakai kredit dari QuickAITool. Daftar lewat link gw (gratis):_\n' +
-            'https://app.quickaitool.com/?ref=HIP257XH'
+            '💡 _Bot ini jalan pakai kredit dari AgentRouter. Daftar lewat link gw (gratis, wajib akun GitHub lama):_\n' +
+            'https://agentrouter.org/register?aff=lokZ'
         );
         return;
     }
