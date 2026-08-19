@@ -57,6 +57,29 @@ const WEBHOOK_PATH = process.env.TELEGRAM_WEBHOOK_PATH || `/telegram-webhook/${W
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: TELEGRAM_MODE !== 'webhook' });
 const { setBotInstance, splitMessage, sendSafe, withTyping, escapeSafeMd } = require("./modules/telegram-utils");
 setBotInstance(bot);
+
+// === Forum-topic routing (AsyncLocalStorage) ===
+// Grup mode-forum: chat.id sama buat semua topic; yg mbedain cuma message_thread_id.
+// Simpen {chatId, threadId} pesan asal per-handler, lalu patch method kirim SEKALI biar
+// reply otomatis balik ke topic asal — tanpa nyentuh ~97 call-site sendSafe/withTyping.
+const { AsyncLocalStorage } = require('async_hooks');
+const topicCtx = new AsyncLocalStorage();
+for (const _m of ['sendMessage', 'sendPhoto', 'sendDocument', 'sendChatAction']) {
+    const orig = bot[_m].bind(bot);
+    bot[_m] = (chatId, ...rest) => {
+        const s = topicCtx.getStore();
+        // Inject cuma kalau: (a) lagi dalam context handler, (b) target === chat ASAL pesan
+        // (DM admin/user beda chatId → GA disuntik, Telegram nolak thread asing), (c) caller
+        // belum set sendiri. Post channel (freegames/wcp) jalan di setInterval = luar context
+        // → store undefined → passthrough identik perilaku lama.
+        if (s && s.threadId != null && String(chatId) === String(s.chatId)) {
+            const o = rest[1];   // opts SELALU arg ke-2 setelah chatId di 4 method ini
+            if (o == null) rest[1] = { message_thread_id: s.threadId };
+            else if (typeof o === 'object' && o.message_thread_id == null) rest[1] = { ...o, message_thread_id: s.threadId };
+        }
+        return orig(chatId, ...rest);
+    };
+}
 if (TELEGRAM_MODE !== 'webhook') {
     bot.deleteWebHook({ drop_pending_updates: false }).catch((e) => {
         console.error('Gagal delete webhook lama:', e.message);
@@ -1436,7 +1459,7 @@ startOpsHttpServer();
 //  HANDLER — command + gate grup + vision + file + YouTube
 // =============================================================================
 
-bot.on('message', async (msg) => {
+bot.on('message', (msg) => topicCtx.run({ chatId: msg.chat.id, threadId: msg.message_thread_id }, async () => {
     const chatId = msg.chat.id;
     const userId = msg.from ? msg.from.id : null;
     const key = sessionKey(msg);
@@ -1453,6 +1476,16 @@ bot.on('message', async (msg) => {
 
     lastActive[key] = Date.now();
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+
+    // Forum lock: kalau udah di-bind (/bindtopic), di grup ITU cuma layani room ter-bind.
+    // General (thread undefined) & topic lain diabaikan total. /bindtopic & /unbindtopic
+    // tetep lolos biar bisa re-bind dari topic mana pun. DM & grup lain ga kena gate.
+    if (isGroup && runtimeState.boundChatId && String(chatId) === String(runtimeState.boundChatId)) {
+        const isBindCmd = /^\/(un)?bindtopic\b/i.test(text);
+        if (!isBindCmd && String(msg.message_thread_id ?? '') !== String(runtimeState.boundThreadId ?? '')) {
+            return;   // pesan dari General / topic lain → abaikan
+        }
+    }
 
     // Per-session lock: kalau handler buat key ini lagi proses LLM, tolak pesan baru.
     // Ini cegah race condition push ke chatHistory + cost double.
@@ -1736,6 +1769,28 @@ bot.on('message', async (msg) => {
             recordError('freegames', e);
             sendSafe(chatId, `❌ freegames gagal: ${String(e.message || e).slice(0, 160)}`);
         }
+        return;
+    }
+    if (cmd === '/bindtopic') {
+        if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
+        if (!isGroup) { sendSafe(chatId, '⚠️ Jalankan di dalam grup (room copux), bukan DM.'); return; }
+        if (msg.message_thread_id == null) {
+            sendSafe(chatId, '⚠️ Ga kedeteksi topic. Jalanin `/bindtopic` DI DALAM room copux (bukan General).');
+            return;
+        }
+        runtimeState.boundChatId = String(chatId);
+        runtimeState.boundThreadId = String(msg.message_thread_id);
+        saveRuntimeState();
+        sendSafe(chatId, `✅ COPUX dikunci ke room ini (thread \`${msg.message_thread_id}\`).\nPesan di General & topic lain bakal diabaikan. Buka lagi: \`/unbindtopic\`.`);
+        return;
+    }
+    if (cmd === '/unbindtopic') {
+        if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
+        const wasBound = !!runtimeState.boundChatId;
+        delete runtimeState.boundChatId;
+        delete runtimeState.boundThreadId;
+        saveRuntimeState();
+        sendSafe(chatId, wasBound ? '🔓 Lock topic dibuka — COPUX layani semua topic lagi.' : 'ℹ️ Emang lagi ga ke-lock.');
         return;
     }
     if (cmd === '/buildwcp') {
@@ -2160,12 +2215,12 @@ bot.on('message', async (msg) => {
         releaseLLMSlot();
         inFlight.delete(key);
     }
-});
+}));
 
 console.log('🚀 Bot COPUX-FourFect (gabungan V1+V2) startup…');
 
 
-bot.on('document', async (msg) => {
+bot.on('document', (msg) => topicCtx.run({ chatId: msg.chat.id, threadId: msg.message_thread_id }, async () => {
     const doc = msg.document;
     if (!doc || !doc.file_name) return;
     
@@ -2173,6 +2228,14 @@ bot.on('document', async (msg) => {
     if (!targetFiles.includes(doc.file_name)) return;
     
     const chatId = msg.chat.id;
+    // Forum lock: lib emit 'message' DAN 'document' buat pesan dokumen — gate di handler
+    // 'message' ga nutup jalur ini. Mirror gate di sini biar dokumen dari General/topic lain
+    // ga bypass lock. (Dokumen ga ada command → ga perlu exception /bindtopic.)
+    if ((msg.chat.type === 'group' || msg.chat.type === 'supergroup') && runtimeState.boundChatId
+        && String(chatId) === String(runtimeState.boundChatId)
+        && String(msg.message_thread_id ?? '') !== String(runtimeState.boundThreadId ?? '')) {
+        return;
+    }
     try {
         bot.sendChatAction(chatId, 'typing').catch(() => {});
         const link = await bot.getFileLink(doc.file_id);
@@ -2196,13 +2259,13 @@ bot.on('document', async (msg) => {
     } catch (e) {
         return bot.sendMessage(chatId, `❌ *Kesalahan Node Internal Fatal:* ${escapeSafeMd(e.message)}`, { parse_mode: 'MarkdownV2' });
     }
-});
+}));
 
 // -----------------------------------------------------------------------------
 //  CALLBACK QUERY — tombol Reject/Promote per addfix (admin-only).
 //  callback_data format ketat: `pf:<p|r>:<ts>`. Semua input divalidasi regex.
 // -----------------------------------------------------------------------------
-bot.on('callback_query', async (q) => {
+bot.on('callback_query', (q) => topicCtx.run({ chatId: q.message && q.message.chat ? q.message.chat.id : undefined, threadId: q.message ? q.message.message_thread_id : undefined }, async () => {
     const ack = (t) => bot.answerCallbackQuery(q.id, t ? { text: t } : {}).catch(() => {});
     try {
         const fromId = q.from && q.from.id;
@@ -2266,7 +2329,7 @@ bot.on('callback_query', async (q) => {
         console.error('callback_query gagal:', e.message);
         await ack('⚠️ Error, cek log server.');
     }
-});
+}));
 
 async function handleDlcCommand(chatId, appId, bot) {
     try {
