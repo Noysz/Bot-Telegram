@@ -161,7 +161,7 @@ async function postComponent(item) {
     const caption =
       `🧩 ${item.type} — ${item.verName}\n` +
       `📦 sumber: ${item.source}\n` +
-      `⚠️ Binary pihak-3 — verifikasi sebelum install.`;
+      `⚠️ Binary pihak-3 — verifikasi sebelum import.`;
     await bot.sendDocument(
       cfg.channelId,
       tmpFile,
