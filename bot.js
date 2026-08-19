@@ -31,6 +31,7 @@ const wcpWatch = require('./modules/wcp-watch');
 const wcpBuild = require('./modules/wcp-build');
 const wcpHook = require('./modules/wcp-hook');
 const gameConfig = require('./modules/gameconfig');
+const freeGames = require('./modules/freegames');
 const ACCESS_GATE_MSG =
     '🔒 *Akses COPUX dikunci*\n\n' +
     'COPUX jalan pakai kredit AgentRouter. Biar bisa dipakai:\n' +
@@ -724,6 +725,15 @@ try {
     const gcInfo = gameConfig.init({ bot, dataDir: DATA_DIR, log: console.log, errLog: console.error, recordError });
     console.log(`🎮 GameConfig init: enabled=${gcInfo.enabled}, repo=${gcInfo.repo}, ttl=${gcInfo.ttlMin}m`);
 } catch (e) { console.error('GameConfig init gagal:', e.message); }
+
+// FreeGames notifier (auto-post game gratis Epic/Steam/GOG ke channel) — opsional.
+// Fallback channel ke WCP_CHANNEL_ID. Autostart cuma kalau FREEGAME_ENABLED=1.
+try {
+    const fgInfo = freeGames.init({ bot, dataDir: DATA_DIR, statePath: path.join(DATA_DIR, 'freegame-seen.json'),
+        log: console.log, errLog: console.error });
+    console.log(`🎁 FreeGames init: ${fgInfo.platforms}, ${fgInfo.seen} seen, channel=${fgInfo.channel}`);
+    if (/^(1|true|on)$/i.test(String(process.env.FREEGAME_ENABLED || ''))) freeGames.start();
+} catch (e) { console.error('FreeGames init gagal:', e.message); }
 
 // =============================================================================
 //  SYSTEM PROMPT (persona COPUX-FourFect — versi 2 KELUARGA emulator)
@@ -1693,6 +1703,38 @@ bot.on('message', async (msg) => {
         } catch (e) {
             recordError('wcphook', e);
             sendSafe(chatId, `❌ wcphook gagal: ${String(e.message || e).slice(0, 160)}`);
+        }
+        return;
+    }
+    if (cmd === '/freegames') {
+        if (!isAdmin(userId)) { sendSafe(chatId, '🔒 Khusus admin.'); return; }
+        const arg = text.replace(/^\/freegames(@\S+)?\s*/i, '').trim().toLowerCase();
+        try {
+            if (arg === 'on') {
+                sendSafe(chatId, freeGames.start() ? '✅ FreeGames notifier ON.' : '⚠️ Gagal start (cek channel / FREEGAME_CHANNEL_ID).');
+            } else if (arg === 'off') {
+                sendSafe(chatId, freeGames.stop() ? '🛑 FreeGames notifier OFF.' : 'ℹ️ Notifier emang lagi mati.');
+            } else if (arg === 'now') {
+                sendSafe(chatId, '⏳ Poll free games jalan…');
+                const r = await freeGames.pollOnce();
+                sendSafe(chatId, `📊 FreeGames: ${r.posted || 0} di-post, ${r.deferred || 0} ditunda, ${r.errors || 0} error, ${r.discovered || 0} discovered.`);
+            } else if (arg === 'seed') {
+                const r = await freeGames.seed();
+                sendSafe(chatId, `🌱 Seed freegames: ${r.discovered || 0} giveaway di-record (0 di-post).`);
+            } else {
+                const s = freeGames.status();
+                sendSafe(chatId,
+                    `🎁 *FreeGames* (notifier game gratis)\n` +
+                    `status: ${s.running ? 'ON' : 'OFF'}\n` +
+                    `platform: ${s.platforms}\n` +
+                    `tipe: ${s.types.join(', ')}\n` +
+                    `channel: ${s.channel || '(belum set)'}\n` +
+                    `seen: ${s.seen} | tiap ${s.pollMinutes}m | cap ${s.maxPerPoll}/poll\n\n` +
+                    `perintah: \`/freegames on|off|now|seed\``);
+            }
+        } catch (e) {
+            recordError('freegames', e);
+            sendSafe(chatId, `❌ freegames gagal: ${String(e.message || e).slice(0, 160)}`);
         }
         return;
     }
