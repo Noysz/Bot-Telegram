@@ -924,6 +924,15 @@ webTools.init({
 });
 
 const MAX_TOOL_ROUNDS = 4;
+// Cap tool-call per round. 1 response model (4096 token) bisa muat ~200 blok
+// tool-call; web_fetch @20-28s dgn MAX_CONCURRENT_WEB_FETCH=2 = puluhan menit
+// kerja dalam SATU round, sambil megang LLM slot (MAX_CONCURRENT_LLM=3) dan
+// bakar credit Firecrawl. Model normal butuh 1-3 call per round.
+const MAX_TOOL_CALLS_PER_ROUND = Math.max(1, parseInt(process.env.MAX_TOOL_CALLS_PER_ROUND || '4', 10));
+// Sisa budget minimum buat berani nembak 1 call LLM lagi. Di bawah ini, provider
+// berikutnya di-skip — daripada mulai call yg pasti kepotong deadline.
+const LLM_MIN_CALL_MS = Math.max(1000, parseInt(process.env.LLM_MIN_CALL_MS || '8000', 10));
+const LLM_CALL_TIMEOUT_MS = Math.max(5000, parseInt(process.env.LLM_CALL_TIMEOUT_MS || '120000', 10));
 // Query yang nyangkut istilah teknis → paksa KB lookup round-0 (anti-halu spec/versi).
 const KB_FORCE_RE = /dimensity|helio|snapdragon|exynos|tensor|mali|adreno|dxvk|sarek|vkd3d|box64|box86|fex|winlator|ludashi|gamehub|proton|wine|turnip|driver|preset|\bfps\b|vulkan|d3d\d|directx/i;
 const TOOLS = [
@@ -1043,12 +1052,23 @@ let promoteInFlight = false;   // lock anti dua /promotefix all barengan (dup se
 
 
 
+// Arg tool datang dari LLM (dipengaruhi input user) → bentuknya bisa apa aja.
+// `String(v)` THROW kalau v objek yg toString/valueOf-nya ke-shadow non-callable
+// (mis. {"toString":0}) → 1 pesan bikin request gagal. Non-string dianggap kosong;
+// angka tetap diterima biar arg numerik ga ilang.
+const argStr = (v) => (typeof v === 'string' ? v : (typeof v === 'number' && Number.isFinite(v) ? String(v) : ''));
+const argInt = (v, dflt) => {
+    const n = typeof v === 'number' ? v : parseInt(typeof v === 'string' ? v : '', 10);
+    return Number.isFinite(n) ? n : dflt;
+};
+
 async function runTool(name, args) {
-    if (name === 'kb_lookup') return kb.kbLookup(String(args.topic || ''));
-    if (name === 'kb_search') return kb.kbSemanticSearch(String(args.query || ''));
-    if (name === 'kb_rag_search') return kb.kbRagSearch(String(args.query || ''), args.top_k || args.topK || 8);
-    if (name === 'web_search') return await webTools.webSearch(String(args.query || ''));
-    if (name === 'web_fetch') return await webTools.webFetch(String(args.url || ''));
+    const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+    if (name === 'kb_lookup') return kb.kbLookup(argStr(a.topic));
+    if (name === 'kb_search') return kb.kbSemanticSearch(argStr(a.query));
+    if (name === 'kb_rag_search') return kb.kbRagSearch(argStr(a.query), argInt(a.top_k || a.topK, 8));
+    if (name === 'web_search') return await webTools.webSearch(argStr(a.query));
+    if (name === 'web_fetch') return await webTools.webFetch(argStr(a.url));
     return 'Tool ga dikenal: ' + name;
 }
 
@@ -1059,13 +1079,27 @@ async function runTool(name, args) {
 const LLM_TEMPERATURE = parseFloat(process.env.LLM_TEMPERATURE || '0.3');
 const LLM_MAX_TOKENS = parseInt(process.env.LLM_MAX_TOKENS || '4096', 10);
 
-async function chatCompletion(messages, useTools, hasImage, forceKb) {
+async function chatCompletion(messages, useTools, hasImage, forceKb, deadline) {
     const providers = currentProviders(hasImage);
 
     let lastErr = null;
     let firstFail = null;
     for (let i = 0; i < providers.length; i++) {
         const cfg = providers[i];
+        // Timeout per-call NYUSUT ikut sisa budget runAgent. Tanpa ini deadline cuma
+        // dicek ANTAR-round, jadi satu round bisa makan (jumlah provider × 120s) dan
+        // runAgent overshoot jauh — kejadian 480s padahal AGENT_DEADLINE_MS=180s.
+        let callTimeout = LLM_CALL_TIMEOUT_MS;
+        if (deadline) {
+            const left = deadline - Date.now();
+            if (left < LLM_MIN_CALL_MS) {
+                if (!firstFail) firstFail = { name: cfg.name, reason: 'deadline' };
+                recordLlmEvent({ ok: false, provider: cfg.name, model: cfg.model, ms: 0, message: `${cfg.name} skip: budget habis` });
+                console.error(`LLM provider ${cfg.name} skip: sisa budget ${left}ms < ${LLM_MIN_CALL_MS}ms`);
+                break;
+            }
+            callTimeout = Math.min(callTimeout, left);
+        }
         // Sampling params eksplisit: default provider bisa temp tinggi (output ngaco) /
         // budget kecil (reasoning makan token → content kosong). Override via .env kalau
         // ada provider rewel. CF-native (di bawah) pakai schema sendiri, param ini di-drop.
@@ -1100,7 +1134,7 @@ async function chatCompletion(messages, useTools, hasImage, forceKb) {
         try {
             const res = await axios.post(cfg.url, postBody, {
                 headers: { 'Authorization': `Bearer ${cfg.key}`, 'Content-Type': 'application/json' },
-                timeout: 120000
+                timeout: callTimeout
             });
             const ms = Date.now() - t0;
             let outData = res.data;
@@ -1142,7 +1176,9 @@ async function chatCompletion(messages, useTools, hasImage, forceKb) {
             if (i === providers.length - 1) throw lastErr;
         }
     }
-    throw lastErr;
+    // `break` karena budget habis bisa kejadian di provider PERTAMA → lastErr masih
+    // null, dan `throw null` bikin error handler di atas kehilangan konteks.
+    throw lastErr || new Error('LLM budget habis sebelum ada provider yang dicoba');
 }
 
 // MiniMax-M3 wraps reasoning in <think>...</think>. Strip before Telegram.
@@ -1227,7 +1263,7 @@ async function runAgent(key, images) {
         if (salvaged || (deadline - Date.now()) < SALVAGE_MIN_MS) return '';
         salvaged = true;
         working.push({ role: 'user', content: 'STOP manggil tool. Semua hasil pencarian SUDAH ada di atas. Tulis jawaban final SEKARANG dalam teks biasa buat user — tanpa sintaks <function>/<tool_call>/JSON mentah. Kalau hasilnya ga relevan, bilang terus terang lalu jawab dari pengetahuan yang ada.' });
-        const d = await chatCompletion(working, false, hasImage, false);
+        const d = await chatCompletion(working, false, hasImage, false, deadline);
         const sm = d && d.choices && d.choices[0] && d.choices[0].message;
         const out = sm && typeof sm.content === 'string' ? llmParse.stripThink(sm.content) : '';
         console.log(`[${key}] 🛟 salvage lastRound -> ${out.length} char`);
@@ -1244,12 +1280,39 @@ async function runAgent(key, images) {
         // PAKSA model call KB dulu (tool_choice:required) sebelum boleh jawab. Nutup halu
         // "jawab dari ingatan" (mis. ngarang GPU/versi DXVK). Round berikutnya balik auto.
         const forceKb = round === 0 && !lastRound && KB_FORCE_RE.test(focusHint);
-        const data = await chatCompletion(working, !lastRound, hasImage, forceKb);
+        let data;
+        try {
+            data = await chatCompletion(working, !lastRound, hasImage, forceKb, deadline);
+        } catch (e) {
+            // Budget kepotong di tengah call → kasih pesan timeout yang jelas, jangan
+            // lempar error mentah (user cuma dapet friendlyError generik).
+            if (Date.now() > deadline - LLM_MIN_CALL_MS) {
+                return '(agent timeout — pertanyaannya kompleks, persempit dulu biar gw bisa jawab lebih cepet)';
+            }
+            throw e;
+        }
         const m = data && data.choices && data.choices[0] && data.choices[0].message;
         if (!m) return '(server ga balikin jawaban, coba lagi)';
         if (!lastRound && m.tool_calls && m.tool_calls.length) {
-            working.push(m);
-            for (const call of m.tool_calls) {
+            // Cap DULU, lalu push assistant message yang UDAH ke-cap. Kalau assistant
+            // message tetap bawa 200 tool_calls tapi cuma 4 yang dibales, request
+            // berikutnya invalid (tiap tool_call_id WAJIB punya message `tool`) dan
+            // provider nolak 400. Jadi cap-nya harus konsisten di dua sisi.
+            const calls = m.tool_calls.slice(0, MAX_TOOL_CALLS_PER_ROUND);
+            if (m.tool_calls.length > calls.length) {
+                console.log(`[${key}] ⚠️ tool-call di-cap ${m.tool_calls.length} → ${calls.length}`);
+            }
+            working.push({ ...m, tool_calls: calls });
+            let outOfTime = false;
+            for (const call of calls) {
+                // Deadline dicek DI DALAM loop: sebelumnya cuma antar-round, jadi satu
+                // round bisa nge-antri puluhan menit web_fetch. Sisa call tetap dibales
+                // dgn stub biar invariant tool_call_id ga rusak.
+                if (!outOfTime && Date.now() > deadline) outOfTime = true;
+                if (outOfTime) {
+                    working.push({ role: 'tool', tool_call_id: call.id, content: 'Dilewati: budget waktu habis. Jawab pakai data yang sudah ada.' });
+                    continue;
+                }
                 let args = {};
                 try { args = JSON.parse(call.function.arguments || '{}'); } catch (e) {}
                 const result = await runTool(call.function.name, args);
@@ -1264,7 +1327,14 @@ async function runAgent(key, images) {
             const textCalls = llmParse.parseTextToolCalls(m.content);
             if (textCalls.length) {
                 let feedback = '';
-                for (const call of textCalls) {
+                // Jalur teks ga punya invariant tool_call_id (feedback-nya 1 message
+                // user biasa) → cukup di-cap + berhenti kalau budget habis.
+                const capped = textCalls.slice(0, MAX_TOOL_CALLS_PER_ROUND);
+                if (textCalls.length > capped.length) {
+                    console.log(`[${key}] ⚠️ tool-call(text) di-cap ${textCalls.length} → ${capped.length}`);
+                }
+                for (const call of capped) {
+                    if (Date.now() > deadline) { feedback += '[dilewati: budget waktu habis]\n\n'; break; }
                     const result = await runTool(call.name, call.args || {});
                     console.log(`[${key}] 🔧(text) ${call.name}(${JSON.stringify(call.args || {}).slice(0, 90)})`);
                     feedback += `[hasil ${call.name}]\n${result}\n\n`;
@@ -2389,5 +2459,5 @@ async function handleDlcCommand(chatId, appId, bot) {
 }
 
 if (process.env.HARNESS_MODE) {
-    module.exports = { chatHistory, runAgent, SYSTEM_PROMPT };
+    module.exports = { chatHistory, runAgent, runTool, SYSTEM_PROMPT };
 }
