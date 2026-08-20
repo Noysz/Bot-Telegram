@@ -1210,6 +1210,30 @@ async function runAgent(key, images) {
     const AGENT_DEADLINE_MS = parseInt(process.env.AGENT_DEADLINE_MS || '180000', 10);   // 3 menit
     const deadline = Date.now() + AGENT_DEADLINE_MS;
 
+    // SALVAGE lastRound: di round terakhir tools sengaja dimatiin, tapi sebagian model
+    // (kat-coder-pro-v2.5 / Kimi-K2.6, observed 2026-08-20) tetep mancarin sintaks
+    // tool-call. Habis stripThink isinya jadi KOSONG → dulu user cuma dapet pesan
+    // "(formatnya gagal)" padahal hasil 4 round pencarian UDAH ada di `working`.
+    // Di sini dikasih SATU kesempatan lagi tanpa tools buat maksa jadi prosa.
+    // Sengaja TIDAK jalanin tool lagi: budget round udah habis, dan ngeksekusi
+    // permintaan tool di titik ini bikin model bisa nyeret rantai fetch tanpa batas.
+    let salvaged = false;
+    // Butuh sisa waktu yg cukup: cek `Date.now() > deadline` doang ga ngebatesin
+    // LAMANYA call. chatCompletion muter tiap provider @120s timeout (bot.js:1103),
+    // jadi salvage bisa nembus deadline sampai menit-menitan sambil megang LLM slot
+    // (MAX_CONCURRENT_LLM=3 → user lain keburu starve). Skip aja kalau mepet.
+    const SALVAGE_MIN_MS = parseInt(process.env.SALVAGE_MIN_MS || '30000', 10);
+    const salvageFinal = async () => {
+        if (salvaged || (deadline - Date.now()) < SALVAGE_MIN_MS) return '';
+        salvaged = true;
+        working.push({ role: 'user', content: 'STOP manggil tool. Semua hasil pencarian SUDAH ada di atas. Tulis jawaban final SEKARANG dalam teks biasa buat user — tanpa sintaks <function>/<tool_call>/JSON mentah. Kalau hasilnya ga relevan, bilang terus terang lalu jawab dari pengetahuan yang ada.' });
+        const d = await chatCompletion(working, false, hasImage, false);
+        const sm = d && d.choices && d.choices[0] && d.choices[0].message;
+        const out = sm && typeof sm.content === 'string' ? llmParse.stripThink(sm.content) : '';
+        console.log(`[${key}] 🛟 salvage lastRound -> ${out.length} char`);
+        return out;
+    };
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         if (Date.now() > deadline) {
             return '(agent timeout — pertanyaannya kompleks, persempit dulu biar gw bisa jawab lebih cepet)';
@@ -1253,12 +1277,19 @@ async function runAgent(key, images) {
             const clean = llmParse.stripThink(m.content);
             if (clean) return clean;
             // content cuma sisa sintaks tool yg ga keparse → jangan bocorin
-            if (lastRound) return '(gw nyoba ngambil data tapi formatnya gagal — coba tanya ulang ya)';
+            if (lastRound) {
+                const salv = await salvageFinal();
+                return salv || '(gw nyoba ngambil data tapi formatnya gagal — coba tanya ulang ya)';
+            }
             working.push({ role: 'user', content: 'Tulis jawaban final dalam teks biasa, tanpa sintaks tool.' });
             continue;
         }
-        // Empty content di lastRound = exit fallback; ga ada gunanya nge-nudge lagi.
-        if (lastRound) return '(model ngasih response kosong di round terakhir, coba kirim ulang)';
+        // Empty content di lastRound: coba salvage sekali (data tool udah di working),
+        // baru nyerah — ga ada gunanya nge-nudge loop lagi.
+        if (lastRound) {
+            const salv = await salvageFinal();
+            return salv || '(model ngasih response kosong di round terakhir, coba kirim ulang)';
+        }
         working.push({ role: 'user', content: 'Tulis jawaban finalnya sekarang dalam teks ya.' });
     }
     return '(kebanyakan langkah pencarian, coba persempit pertanyaannya)';
